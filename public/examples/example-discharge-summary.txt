@@ -1,0 +1,22 @@
+DISCHARGE SUMMARY (Example)
+Patient: Jane Doe (pseudonym)
+DOB: 1991-05-14
+Admission Date: 2024-11-02
+Discharge Date: 2024-11-06
+
+Reason for admission:
+Presented to ED for worsening depressive symptoms, insomnia, and passive suicidal ideation without plan. Reported recent job loss and increased anxiety.
+
+Hospital course:
+No suicide attempts during admission. Started sertraline 50 mg daily and trazodone 50 mg nightly. Patient tolerated medications without side effects. Mood improved; sleep improved to 6 hours/night by discharge.
+
+Past psychiatric history:
+Prior diagnosis of Major Depressive Disorder (MDD). Prior outpatient therapy intermittently; no prior psychiatric hospitalizations.
+
+Substance use:
+Alcohol: 1-2 drinks on weekends. Denies withdrawal history.
+Tobacco: denies.
+Cannabis: occasional use, last use 2 weeks prior to admission.
+
+Discharge plan:
+Follow-up with outpatient psychiatry in 2 weeks and therapy in 1 week. Safety plan reviewed.

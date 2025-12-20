@@ -1,0 +1,21 @@
+PSYCHIATRIC EVALUATION (Example)
+Patient: Jane Doe (pseudonym)
+Date: 2024-11-15
+
+Chief complaint:
+"I can't sleep and I've been feeling hopeless."
+
+HPI:
+Patient reports depressed mood for 3 months, anhedonia, low energy, poor concentration, and insomnia. Appetite decreased with 6-lb weight loss. Passive suicidal ideation last month; denies plan or intent. Anxiety increased since job loss. Denies manic symptoms, psychosis, or panic attacks.
+
+Mental status exam:
+Appearance appropriate, mood "down", affect constricted. Thought process linear. No hallucinations or delusions. Insight and judgment fair.
+
+PHQ-9:
+Score 18 (moderately severe). Endorsed low interest, depressed mood, sleep disturbance, fatigue, poor appetite, difficulty concentrating.
+
+Assessment:
+Major Depressive Disorder, recurrent, moderate. Generalized Anxiety Disorder. Rule out PTSD.
+
+Plan:
+Increase sertraline to 100 mg daily; continue trazodone 50 mg nightly PRN. Start weekly therapy. Safety plan reviewed.

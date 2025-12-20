@@ -1,0 +1,633 @@
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500&family=Source+Sans+3:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@source "../index.html";
+@source "./**/*.{ts,tsx,jsx,js,html}";
+
+@theme {
+  --font-serif: 'Crimson Pro', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Source Sans 3', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Consolas', monospace;
+
+  /* Maple Light Palette */
+  --color-canvas: #FDFBF7;
+  --color-paper: #FAF8F4;
+  --color-surface: #F6F3ED;
+  --color-muted: #EFEBE4;
+  --color-border: #E4DFD6;
+  --color-border-subtle: #EBE7E0;
+
+  /* Text hierarchy */
+  --color-ink: #2C2416;
+  --color-text: #4A4136;
+  --color-text-secondary: #6B6356;
+  --color-text-tertiary: #8C8478;
+  --color-text-muted: #A8A090;
+
+  /* Accent - Clinical Maple */
+  --color-maple: #B85C38;
+  --color-maple-dark: #8B4528;
+  --color-maple-light: #D4845C;
+  --color-maple-bg: rgba(184, 92, 56, 0.06);
+
+  /* Secondary */
+  --color-forest: #3D5A47;
+  --color-azure: #4A6FA5;
+  --color-teal: #3D7A7A;
+
+  /* Semantic */
+  --color-success: #4A7C59;
+  --color-error: #A8423F;
+}
+
+/* Base styles */
+html {
+  color-scheme: light;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  background: var(--color-canvas);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-maple);
+  color: white;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 8px;
+}
+
+/* Component layer */
+@layer components {
+  /* ==================== SIDEBAR ==================== */
+  .sidebar {
+    background: var(--color-paper);
+    border-right: 1px solid var(--color-border-subtle);
+  }
+
+  /* Logo - outline with rounded corners meeting straight edge */
+  .logo-icon {
+    @apply w-7 h-7 flex items-center justify-center;
+    border: 1.5px solid var(--color-maple);
+    border-radius: 8px;
+    color: var(--color-maple);
+  }
+
+  /* Icon button */
+  .icon-btn {
+    @apply w-7 h-7 flex items-center justify-center transition-colors;
+    border-radius: 6px;
+    color: var(--color-text-muted);
+  }
+
+  .icon-btn:hover {
+    background: var(--color-surface);
+    color: var(--color-text-secondary);
+  }
+
+  /* Action pill - skinny with square-ish rounded ends */
+  .action-pill {
+    @apply flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-all;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    color: var(--color-text-secondary);
+    background: var(--color-canvas);
+  }
+
+  .action-pill:hover {
+    border-color: var(--color-maple);
+    color: var(--color-maple);
+    background: var(--color-maple-bg);
+  }
+
+  /* Case item */
+  .case-item {
+    @apply flex items-center gap-2 px-2.5 py-2 cursor-pointer text-xs transition-all;
+    border-radius: 6px;
+    color: var(--color-text-secondary);
+  }
+
+  .case-item:hover {
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  .case-item.active {
+    background: var(--color-maple-bg);
+    color: var(--color-maple);
+  }
+
+  .case-item svg {
+    opacity: 0.5;
+  }
+
+  .case-item:hover svg, .case-item.active svg {
+    opacity: 0.9;
+  }
+
+  /* ==================== HEADER ==================== */
+  .header-bar {
+    height: 46px;
+    background: var(--color-paper);
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  /* Patient badge - rectangular with subtle rounding */
+  .patient-badge {
+    @apply flex items-center gap-0 px-1;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 8px;
+  }
+
+  .patient-input {
+    @apply bg-transparent border-none text-xs px-2.5 py-1.5;
+    color: var(--color-text);
+    width: 90px;
+  }
+
+  .patient-input.name {
+    width: 130px;
+    font-weight: 500;
+    color: var(--color-ink);
+  }
+
+  .patient-input::placeholder {
+    color: var(--color-text-muted);
+  }
+
+  .patient-input:focus {
+    outline: none;
+  }
+
+  .patient-sep {
+    @apply w-px h-4;
+    background: var(--color-border);
+  }
+
+  .saved-dot {
+    @apply w-2 h-2 rounded-full mx-2;
+    background: var(--color-success);
+  }
+
+  /* Progress pill */
+  .progress-pill {
+    @apply flex items-center gap-1.5 px-2.5 py-1;
+    background: var(--color-surface);
+    border-radius: 6px;
+  }
+
+  .progress-num {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+
+  .progress-total {
+    font-size: 11px;
+    color: var(--color-text-muted);
+  }
+
+  .progress-bar-mini {
+    @apply w-12 h-1 overflow-hidden;
+    background: var(--color-muted);
+    border-radius: 2px;
+  }
+
+  .progress-fill-mini {
+    @apply h-full transition-all;
+    background: var(--color-maple);
+    border-radius: 2px;
+  }
+
+  /* Generate button - outline, square-ish rounded */
+  .generate-btn {
+    @apply inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium transition-all;
+    border: 1.5px solid var(--color-maple);
+    border-radius: 8px;
+    color: var(--color-maple);
+    background: transparent;
+  }
+
+  .generate-btn:hover:not(:disabled) {
+    background: var(--color-maple);
+    color: white;
+  }
+
+  .generate-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  /* ==================== RIGHT PANEL ==================== */
+  .right-panel {
+    width: 320px;
+    background: var(--color-paper);
+    border-left: 1px solid var(--color-border-subtle);
+  }
+
+  /* Panel tabs */
+  .panel-tabs {
+    @apply flex gap-1 p-2;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .panel-tab {
+    @apply flex items-center justify-center gap-1.5 py-1.5 px-3 text-xs font-medium transition-all;
+    border-radius: 6px;
+    color: var(--color-text-muted);
+  }
+
+  .panel-tab:hover {
+    color: var(--color-text);
+    background: var(--color-surface);
+  }
+
+  .panel-tab.active {
+    color: var(--color-maple);
+    background: var(--color-maple-bg);
+  }
+
+  .panel-tab svg {
+    opacity: 0.5;
+  }
+
+  .panel-tab:hover svg, .panel-tab.active svg {
+    opacity: 1;
+  }
+
+  /* ==================== SECTIONS ==================== */
+  .section-row {
+    @apply relative cursor-text mb-2 px-3 py-2 -mx-3 transition-all;
+    border-radius: 8px;
+    border-left: 2px solid transparent;
+  }
+
+  .section-row:hover {
+    background: var(--color-surface);
+  }
+
+  .section-row.active {
+    background: var(--color-maple-bg);
+    border-left-color: var(--color-maple);
+  }
+
+  .section-row-header {
+    @apply flex items-center gap-2 mb-1;
+  }
+
+  .section-num {
+    @apply text-[9px] font-mono;
+    color: var(--color-text-muted);
+    opacity: 0.5;
+  }
+
+  .section-label {
+    @apply text-[11px] font-semibold uppercase tracking-wide;
+    color: var(--color-maple);
+    letter-spacing: 0.04em;
+    opacity: 0.85;
+  }
+
+  .section-row.active .section-label {
+    color: var(--color-maple-dark);
+    opacity: 1;
+  }
+
+  .section-text {
+    @apply text-sm leading-relaxed;
+    color: var(--color-text);
+    min-height: 1.5em;
+  }
+
+  .section-text:empty::before {
+    content: attr(data-placeholder);
+    color: var(--color-text-muted);
+    font-style: italic;
+    opacity: 0.6;
+  }
+
+  .section-text:focus {
+    outline: none;
+  }
+
+  /* ==================== CHAT ==================== */
+  /* Citation card */
+  .citation-card {
+    @apply flex gap-2 p-2.5;
+    background: var(--color-surface);
+    border-radius: 8px;
+  }
+
+  .citation-num {
+    @apply text-[10px] font-semibold flex-shrink-0;
+    color: var(--color-maple);
+    font-family: var(--font-serif);
+  }
+
+  /* Messages */
+  .msg {
+    @apply text-sm;
+  }
+
+  .msg.user {
+    @apply mb-2;
+  }
+
+  .msg.assistant {
+    @apply mb-3 pb-3;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .msg-role {
+    @apply text-[10px] font-medium mb-1;
+    opacity: 0.6;
+  }
+
+  .msg.user .msg-role {
+    color: var(--color-text-secondary);
+  }
+
+  .msg.assistant .msg-role {
+    color: var(--color-maple);
+  }
+
+  .msg-text {
+    @apply leading-relaxed;
+    color: var(--color-text);
+  }
+
+  .msg-citations {
+    @apply flex flex-wrap gap-1 mt-2;
+  }
+
+  .msg-cite {
+    @apply inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5;
+    background: var(--color-maple-bg);
+    color: var(--color-maple);
+    border-radius: 4px;
+  }
+
+  /* Chat input wrapper */
+  .chat-input-wrap {
+    @apply p-3;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  /* Chat box - subtle rounding, not pill */
+  .chat-box {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    transition: border-color 0.15s;
+  }
+
+  .chat-box:focus-within {
+    border-color: var(--color-text-muted);
+  }
+
+  .chat-field {
+    @apply w-full text-sm bg-transparent px-3.5 py-2.5 border-none;
+    color: var(--color-text);
+  }
+
+  .chat-field::placeholder {
+    color: var(--color-text-muted);
+  }
+
+  .chat-field:focus {
+    outline: none;
+  }
+
+  .chat-box-footer {
+    @apply flex items-center justify-between px-2.5 pb-2;
+  }
+
+  .chat-meta {
+    @apply flex items-center gap-2;
+  }
+
+  .chat-toggle {
+    @apply flex items-center gap-1 px-2 py-1 text-[10px] transition-all;
+    color: var(--color-text-muted);
+    border-radius: 4px;
+  }
+
+  .chat-toggle:hover {
+    color: var(--color-text);
+    background: var(--color-surface);
+  }
+
+  .chat-toggle.on {
+    color: var(--color-maple);
+    background: var(--color-maple-bg);
+  }
+
+  .chat-toggle svg {
+    opacity: 0.6;
+  }
+
+  .chat-toggle:hover svg, .chat-toggle.on svg {
+    opacity: 1;
+  }
+
+  /* Model badge */
+  .model-badge {
+    @apply text-[9px] font-medium px-1.5 py-0.5;
+    color: var(--color-text-muted);
+    background: var(--color-surface);
+    border-radius: 4px;
+  }
+
+  /* Send button - small circle with animation */
+  .send-btn {
+    @apply w-6 h-6 rounded-full flex items-center justify-center transition-all;
+    background: var(--color-muted);
+    color: var(--color-text-muted);
+  }
+
+  .send-btn.ready {
+    background: var(--color-teal);
+    color: white;
+    animation: sendPulse 2s ease-in-out infinite;
+  }
+
+  .send-btn.ready:hover {
+    transform: scale(1.1);
+    animation: none;
+  }
+
+  .send-btn:active:not(:disabled) {
+    transform: scale(0.9);
+  }
+
+  .send-btn:disabled {
+    cursor: not-allowed;
+  }
+
+  @keyframes sendPulse {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(61, 122, 122, 0.4);
+    }
+    50% {
+      box-shadow: 0 0 0 4px rgba(61, 122, 122, 0);
+    }
+  }
+
+  /* ==================== DROPDOWN ==================== */
+  .dropdown-menu {
+    @apply absolute right-0 top-full mt-1 py-1;
+    background: var(--color-paper);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(44, 36, 22, 0.1);
+    min-width: 9rem;
+    z-index: 50;
+  }
+
+  .dropdown-item {
+    @apply flex items-center gap-2 px-3 py-2 text-xs transition-colors cursor-pointer;
+    color: var(--color-text-secondary);
+  }
+
+  .dropdown-item:hover {
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  .dropdown-item svg {
+    opacity: 0.5;
+  }
+
+  .dropdown-item:hover svg {
+    opacity: 1;
+  }
+
+  /* ==================== FORM ELEMENTS ==================== */
+  .input {
+    @apply w-full border px-3 py-2 text-sm transition-all;
+    background: var(--color-canvas);
+    border-color: var(--color-border);
+    border-radius: 8px;
+    color: var(--color-text);
+  }
+
+  .input::placeholder {
+    color: var(--color-text-muted);
+  }
+
+  .input:focus {
+    outline: none;
+    border-color: var(--color-maple);
+    box-shadow: 0 0 0 2px var(--color-maple-bg);
+  }
+
+  /* Modal */
+  .modal-overlay {
+    @apply fixed inset-0 flex items-center justify-center z-50 p-4;
+    background: rgba(44, 36, 22, 0.25);
+    backdrop-filter: blur(6px);
+  }
+
+  .modal {
+    @apply w-full max-w-sm max-h-[90vh] overflow-y-auto;
+    background: var(--color-paper);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    box-shadow: 0 20px 50px rgba(44, 36, 22, 0.15);
+  }
+
+  /* Labels */
+  .label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-muted);
+  }
+
+  .field-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    margin-bottom: 4px;
+    display: block;
+  }
+
+  /* Toggle */
+  .toggle {
+    @apply relative h-5 w-8 cursor-pointer transition-colors;
+    background: var(--color-border);
+    border-radius: 10px;
+  }
+
+  .toggle.active {
+    background: var(--color-maple);
+  }
+
+  .toggle::after {
+    content: '';
+    @apply absolute top-0.5 left-0.5 h-4 w-4 bg-white transition-transform;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+
+  .toggle.active::after {
+    transform: translateX(12px);
+  }
+
+  /* File type */
+  .file-type-txt { color: var(--color-forest); opacity: 0.6; }
+  .file-type-docx { color: var(--color-azure); opacity: 0.6; }
+  .file-type-pdf { color: var(--color-maple); opacity: 0.6; }
+}
+
+/* ==================== ANIMATIONS ==================== */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Utility */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
