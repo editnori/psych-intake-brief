@@ -1,4 +1,4 @@
-import type { CaseState, PatientProfile, SourceDoc, TemplateSection, ChatMessage, CaseSummary } from './types'
+import type { CaseState, PatientProfile, SourceDoc, TemplateSection, ChatMessage, CaseSummary, ChatThreads, OpenQuestion } from './types'
 import { serializeDocs, restoreDocs } from './parser'
 
 const CASES_KEY = 'psych_intake_cases'
@@ -34,7 +34,7 @@ export function listCases(): CaseSummary[] {
     .sort((a, b) => b.savedAt - a.savedAt)
 }
 
-export function loadCase(caseId?: string): { id: string; profile: PatientProfile; docs: SourceDoc[]; sections: Array<Pick<TemplateSection, 'id' | 'output' | 'citations'>>; chat: ChatMessage[]; savedAt?: number } | null {
+export function loadCase(caseId?: string): { id: string; profile: PatientProfile; docs: SourceDoc[]; sections: Array<Pick<TemplateSection, 'id' | 'title' | 'guidance' | 'output' | 'citations' | 'hidden'>>; chat: ChatThreads; openQuestions: OpenQuestion[]; lastGeneratedAt?: number; savedAt?: number } | null {
   try {
     const cases = readCases()
     if (cases.length === 0) return null
@@ -42,12 +42,21 @@ export function loadCase(caseId?: string): { id: string; profile: PatientProfile
     const parsed = cases.find(c => c.id === targetId)
     if (!parsed) return null
     const docs = restoreDocs(parsed.docs || [])
+    const parsedChat: any = parsed.chat
+    const chat: ChatThreads = Array.isArray(parsedChat)
+      ? { ask: parsedChat as ChatMessage[], edit: [] }
+      : {
+          ask: parsedChat?.ask || [],
+          edit: parsedChat?.edit || []
+        }
     return {
       id: parsed.id,
       profile: parsed.profile || { name: '', mrn: '', dob: '' },
       docs,
       sections: parsed.sections || [],
-      chat: parsed.chat || [],
+      chat,
+      openQuestions: parsed.openQuestions || [],
+      lastGeneratedAt: parsed.lastGeneratedAt,
       savedAt: parsed.savedAt
     }
   } catch {
@@ -55,7 +64,7 @@ export function loadCase(caseId?: string): { id: string; profile: PatientProfile
   }
 }
 
-export function saveCase(caseId: string | null, profile: PatientProfile, docs: SourceDoc[], sections: TemplateSection[], chat: ChatMessage[]): { savedAt: number; id: string } {
+export function saveCase(caseId: string | null, profile: PatientProfile, docs: SourceDoc[], sections: TemplateSection[], chat: ChatThreads, openQuestions: OpenQuestion[], lastGeneratedAt?: number): { savedAt: number; id: string } {
   const savedAt = Date.now()
   const id = caseId || crypto.randomUUID()
   const state: CaseState = {
@@ -63,8 +72,17 @@ export function saveCase(caseId: string | null, profile: PatientProfile, docs: S
     savedAt,
     profile,
     docs: serializeDocs(docs),
-    sections: sections.map(s => ({ id: s.id, output: s.output, citations: s.citations })),
-    chat
+    sections: sections.map(s => ({
+      id: s.id,
+      title: s.title,
+      guidance: s.guidance,
+      output: s.output,
+      citations: s.citations,
+      hidden: s.hidden
+    })),
+    chat,
+    openQuestions,
+    lastGeneratedAt
   }
   const cases = readCases()
   const idx = cases.findIndex(c => c.id === id)

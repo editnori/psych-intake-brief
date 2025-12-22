@@ -11,18 +11,23 @@ export function loadSettings(): AppSettings {
         model: 'gpt-5.2',
         reasoningEffort: 'medium',
         verbosity: 'medium',
-        pdfParser: 'local',
-        pdfModel: 'gpt-4o-mini'
+        pdfParser: 'openai',
+        pdfModel: 'gpt-5.2',
+        showOpenQuestions: true
       }
     }
     const parsed = JSON.parse(raw)
+    const pdfModel = parsed.pdfModel && parsed.pdfModel !== 'gpt-4o-mini'
+      ? parsed.pdfModel
+      : 'gpt-5.2'
     return {
       openaiApiKey: parsed.openaiApiKey || '',
-      model: parsed.model || 'gpt-5.2',
+      model: 'gpt-5.2',
       reasoningEffort: parsed.reasoningEffort || 'medium',
       verbosity: parsed.verbosity || 'medium',
-      pdfParser: parsed.pdfParser || 'local',
-      pdfModel: parsed.pdfModel || 'gpt-4o-mini'
+      pdfParser: parsed.pdfParser || 'openai',
+      pdfModel,
+      showOpenQuestions: parsed.showOpenQuestions ?? true
     }
   } catch {
     return {
@@ -30,15 +35,21 @@ export function loadSettings(): AppSettings {
       model: 'gpt-5.2',
       reasoningEffort: 'medium',
       verbosity: 'medium',
-      pdfParser: 'local',
-      pdfModel: 'gpt-4o-mini'
+      pdfParser: 'openai',
+      pdfModel: 'gpt-5.2',
+      showOpenQuestions: true
     }
   }
 }
 
 export function saveSettings(settings: AppSettings): void {
   try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+    const normalized: AppSettings = {
+      ...settings,
+      model: 'gpt-5.2',
+      pdfModel: settings.pdfModel || 'gpt-5.2'
+    }
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized))
   } catch {
     // Ignore storage errors (e.g. privacy mode)
   }

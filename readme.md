@@ -1,4 +1,4 @@
-# Psych Intake Composer (POC)
+# Psych Intake Brief (POC)
 
 Local-first intake summarization with structured template output and citations. All files are processed locally; only the configured OpenAI endpoint is called for generation.
 

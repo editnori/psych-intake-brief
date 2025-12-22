@@ -58,7 +58,7 @@ export async function readPdfWithOpenAI(file: File, settings: AppSettings): Prom
     warnings.push('Large PDF detected; extraction may be truncated')
   }
 
-  const model = settings.pdfModel || 'gpt-4o-mini'
+  const model = settings.pdfModel || 'gpt-5.2'
   const payload = {
     model,
     store: false,

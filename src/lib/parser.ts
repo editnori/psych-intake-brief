@@ -48,14 +48,16 @@ export function makeDocFromText(
   id?: string,
   warnings?: string[],
   error?: string,
-  parser?: SourceDoc['parser']
+  parser?: SourceDoc['parser'],
+  addedAt: number = Date.now(),
+  tag: SourceDoc['tag'] = 'initial'
 ): SourceDoc {
   const docId = id || crypto.randomUUID()
   const chunks = chunkText(text, docId, name)
-  return { id: docId, name, kind, text, chunks, warnings, error, parser }
+  return { id: docId, name, kind, text, chunks, warnings, error, parser, addedAt, tag }
 }
 
-export async function loadFiles(files: File[], settings?: AppSettings): Promise<SourceDoc[]> {
+export async function loadFiles(files: File[], settings?: AppSettings, tag: SourceDoc['tag'] = 'initial'): Promise<SourceDoc[]> {
   const docs: SourceDoc[] = []
   for (const file of files) {
     const name = file.name
@@ -83,8 +85,8 @@ export async function loadFiles(files: File[], settings?: AppSettings): Promise<
             text = result.text
             parser = 'openai'
             if (result.warnings) warnings.push(...result.warnings)
-          } catch (err: any) {
-            warnings.push(err?.message || 'OpenAI PDF parsing failed, using local parser')
+          } catch {
+            warnings.push('OpenAI PDF parsing failed; used local parser')
           }
         }
         if (!text) {
@@ -106,7 +108,7 @@ export async function loadFiles(files: File[], settings?: AppSettings): Promise<
       warnings.push('No text extracted')
     }
 
-    docs.push(makeDocFromText(name, text, kind, undefined, warnings.length ? warnings : undefined, error, parser))
+    docs.push(makeDocFromText(name, text, kind, undefined, warnings.length ? warnings : undefined, error, parser, Date.now(), tag))
   }
   return docs
 }
@@ -120,10 +122,12 @@ export function serializeDocs(docs: SourceDoc[]): StoredDoc[] {
     id: d.id,
     name: d.name,
     kind: d.kind,
-    text: d.text
+    text: d.text,
+    tag: d.tag,
+    addedAt: d.addedAt
   }))
 }
 
 export function restoreDocs(stored: StoredDoc[]): SourceDoc[] {
-  return stored.map(s => makeDocFromText(s.name, s.text, s.kind, s.id))
+  return stored.map(s => makeDocFromText(s.name, s.text, s.kind, s.id, undefined, undefined, undefined, s.addedAt || Date.now(), s.tag || 'initial'))
 }

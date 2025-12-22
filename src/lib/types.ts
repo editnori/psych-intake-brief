@@ -3,6 +3,8 @@ export interface SourceDoc {
   name: string
   kind: 'txt' | 'docx' | 'pdf' | 'unknown'
   parser?: 'local' | 'openai'
+  tag?: 'initial' | 'followup'
+  addedAt?: number
   text: string
   chunks: Chunk[]
   warnings?: string[]
@@ -29,9 +31,9 @@ export interface TemplateSection {
   id: string
   title: string
   guidance: string
-  placeholder?: string
   output?: string
   citations?: Citation[]
+  hidden?: boolean
 }
 
 export interface PatientProfile {
@@ -41,12 +43,48 @@ export interface PatientProfile {
   sex?: string
 }
 
+export interface OpenQuestion {
+  id: string
+  sectionId: string
+  sectionTitle: string
+  text: string
+  rationale?: string
+  status: 'open' | 'answered' | 'resolved'
+  answer?: string
+  answerSourceNote?: string
+  answerCitations?: Citation[]
+  createdAt: number
+  answeredAt?: number
+  updatedAt?: number
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   text: string
   citations?: Citation[]
   createdAt: number
+  contextLabel?: string
+  contextSnippet?: string
+  editStatus?: 'pending' | 'applied' | 'rejected'
+  editTargetText?: string
+  editTargetScope?: 'selection' | 'section'
+  editSelectionText?: string
+  editSectionId?: string
+  editSectionTitle?: string
+  editApplied?: boolean
+  editApplyMode?: 'replace' | 'append' | 'set' | 'append-note' | 'append-note-after-questions' | 'open-question-answer'
+  editNoteDate?: string
+  editNoteSource?: string
+  editOpenQuestionId?: string
+  editOpenQuestionText?: string
+  editOpenQuestionRationale?: string
+  reviewIssue?: string
+}
+
+export interface ChatThreads {
+  ask: ChatMessage[]
+  edit: ChatMessage[]
 }
 
 export interface AppSettings {
@@ -56,6 +94,7 @@ export interface AppSettings {
   verbosity: 'low' | 'medium' | 'high'
   pdfParser: 'local' | 'openai'
   pdfModel: string
+  showOpenQuestions: boolean
 }
 
 export interface StoredDoc {
@@ -63,6 +102,8 @@ export interface StoredDoc {
   name: string
   kind: SourceDoc['kind']
   text: string
+  tag?: SourceDoc['tag']
+  addedAt?: number
 }
 
 export interface CaseState {
@@ -70,8 +111,10 @@ export interface CaseState {
   savedAt: number
   profile: PatientProfile
   docs: StoredDoc[]
-  sections: Array<Pick<TemplateSection, 'id' | 'output' | 'citations'>>
-  chat: ChatMessage[]
+  sections: Array<Pick<TemplateSection, 'id' | 'title' | 'guidance' | 'output' | 'citations' | 'hidden'>>
+  chat: ChatThreads
+  openQuestions?: OpenQuestion[]
+  lastGeneratedAt?: number
 }
 
 export interface CaseSummary {

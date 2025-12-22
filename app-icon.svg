@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#B85C38" rx="64"/>
+  <g fill="#FDFBF7">
+    <!-- Document icon -->
+    <path d="M160 80h128l80 80v272a16 16 0 01-16 16H160a16 16 0 01-16-16V96a16 16 0 0116-16z"/>
+    <path d="M288 80v64a16 16 0 0016 16h64" fill="none" stroke="#FDFBF7" stroke-width="16"/>
+    <!-- Brain/Mind symbol -->
+    <circle cx="256" cy="280" r="80" fill="none" stroke="#B85C38" stroke-width="12"/>
+    <path d="M220 260c0-20 16-36 36-36s36 16 36 36M220 300c0 20 16 36 36 36s36-16 36-36" fill="none" stroke="#B85C38" stroke-width="10" stroke-linecap="round"/>
+    <circle cx="240" cy="270" r="8" fill="#B85C38"/>
+    <circle cx="272" cy="270" r="8" fill="#B85C38"/>
+  </g>
+</svg>
+
