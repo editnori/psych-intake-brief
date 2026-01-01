@@ -17,16 +17,13 @@ export function loadSettings(): AppSettings {
       }
     }
     const parsed = JSON.parse(raw)
-    const pdfModel = parsed.pdfModel && parsed.pdfModel !== 'gpt-4o-mini'
-      ? parsed.pdfModel
-      : 'gpt-5.2'
     return {
       openaiApiKey: parsed.openaiApiKey || '',
       model: 'gpt-5.2',
       reasoningEffort: parsed.reasoningEffort || 'medium',
       verbosity: parsed.verbosity || 'medium',
       pdfParser: parsed.pdfParser || 'openai',
-      pdfModel,
+      pdfModel: 'gpt-5.2',
       showOpenQuestions: parsed.showOpenQuestions ?? true
     }
   } catch {

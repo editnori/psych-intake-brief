@@ -15,20 +15,11 @@ import {
 import { saveAs } from 'file-saver'
 import jsPDF from 'jspdf'
 import type { PatientProfile, TemplateSection, Citation, ChatMessage } from './types'
+import { stripInlineChunkIds, formatProfile } from './textUtils'
 
 interface CitationIndex {
   map: Map<string, number>
   list: Array<{ id: number; citation: Citation }>
-}
-
-function stripInlineChunkIds(text: string): string {
-  let out = text
-  out = out.replace(/(^|[\s(])\[?[A-Za-z0-9_-]+_chunk_\d+\]?(?=[\s)\].,;:!?]|$)/g, '$1')
-  out = out.replace(/\(\s*\)/g, '')
-  out = out.replace(/\[\s*\]/g, '')
-  out = out.replace(/[ \t]{2,}/g, ' ')
-  out = out.replace(/\s+\n/g, '\n')
-  return out
 }
 
 function formatMarkdownTables(text: string): string {
@@ -176,15 +167,7 @@ function buildCitationIndex(sections: TemplateSection[], chat: ChatMessage[] = [
   return { map, list }
 }
 
-function formatProfile(profile: PatientProfile): string {
-  const parts = [
-    profile.name && `Name: ${profile.name}`,
-    profile.mrn && `MRN: ${profile.mrn}`,
-    profile.dob && `DOB: ${profile.dob}`,
-    profile.sex && `Sex/Gender: ${profile.sex}`
-  ]
-  return parts.filter(Boolean).join(' • ')
-}
+// formatProfile imported from textUtils
 
 function runsFromText(text: string, size: number, color: string): TextRun[] {
   const lines = text.split('\n')
@@ -255,8 +238,16 @@ function buildCalloutTable(label: string, kind: 'open' | 'highlights' | 'post', 
   })
 }
 
-export async function exportDocx(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = []) {
-  const visibleSections = sections.filter(s => !s.hidden)
+export interface ExportOptions {
+  excludeClinicianOnly?: boolean
+}
+
+export async function exportDocx(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = [], options: ExportOptions = {}) {
+  const visibleSections = sections.filter(s => {
+    if (s.hidden) return false
+    if (options.excludeClinicianOnly && s.clinicianOnly) return false
+    return true
+  })
   const { map, list } = buildCitationIndex(visibleSections, chat)
   const profileLine = formatProfile(profile)
 
@@ -369,8 +360,12 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
   saveAs(blob, `psych-intake-${Date.now()}.docx`)
 }
 
-export function exportPdf(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = []) {
-  const visibleSections = sections.filter(s => !s.hidden)
+export function exportPdf(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = [], options: ExportOptions = {}) {
+  const visibleSections = sections.filter(s => {
+    if (s.hidden) return false
+    if (options.excludeClinicianOnly && s.clinicianOnly) return false
+    return true
+  })
   const { map, list } = buildCitationIndex(visibleSections, chat)
   const doc = new jsPDF({ unit: 'pt', format: 'letter' })
   const pageHeight = doc.internal.pageSize.height

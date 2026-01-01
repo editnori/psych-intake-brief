@@ -1,0 +1,13 @@
+sequenceDiagram
+  participant Doc as Documents
+  participant Parser as Parser
+  participant LLM as GPT-5.2
+  participant UI as Interface
+  
+  Doc->>Parser: Upload files
+  Parser->>Parser: Split into chunks
+  Parser->>LLM: Evidence with IDs
+  LLM->>LLM: Generate with refs
+  LLM->>UI: Structured output
+  UI->>UI: Map citations
+  UI->>User: Clickable evidence

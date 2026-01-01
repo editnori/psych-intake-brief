@@ -1,0 +1,14 @@
+flowchart LR
+  subgraph input [Input]
+    F[Files]
+  end
+  subgraph local [Local Processing]
+    TE[Text Extraction]
+    DT[Type Detection]
+    DE[Date Extraction]
+    CH[Chunking]
+  end
+  subgraph output [Output]
+    C[Labeled Chunks]
+  end
+  F --> TE --> DT --> DE --> CH --> C

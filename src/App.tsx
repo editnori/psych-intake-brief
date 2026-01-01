@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FileText, Sparkles, RefreshCw, FileDown, Loader2, Plus, FolderOpen, Settings, Upload, ChevronRight, Quote, ArrowUp, MoreHorizontal, X, File, MessageSquare, Layers, BookOpen, Clock, ChevronUp, ChevronDown, Eye, EyeOff, Pencil } from 'lucide-react'
+import { FileText, Sparkles, RefreshCw, FileDown, Loader2, Plus, FolderOpen, Settings, Upload, ChevronRight, Quote, ArrowUp, MoreHorizontal, X, File, MessageSquare, Layers, BookOpen, Clock, ChevronUp, ChevronDown, Eye, EyeOff, Pencil, Lock } from 'lucide-react'
 import { TEMPLATE_SECTIONS } from './lib/template'
 import type { AppSettings, SourceDoc, TemplateSection, PatientProfile, ChatMessage, ChatThreads, Chunk, OpenQuestion, Citation } from './lib/types'
 import { loadFiles, mergeDocuments, makeDocFromText } from './lib/parser'
+import { normalizeText, normalizeMarkdown, stripInlineChunkIds, formatProfile, normalizeLabelBold, normalizeListBlocks, cleanDisplayText } from './lib/textUtils'
 import { rankEvidenceDiverse } from './lib/evidence'
 import { generateSectionWithOpenAI, askWithOpenAI, editWithOpenAI, reviewSummaryWithOpenAI, answerOpenQuestionsWithOpenAI, recoverCitationsWithOpenAI, extractCitationsFromText } from './lib/llm'
 import { buildDsmIndex, rankDsmEntries, formatDsmEntries, buildDsmQuery } from './lib/dsm'
@@ -89,32 +90,6 @@ export function App() {
 
   const OPEN_QUESTION_RULES =
     'Open questions are optional and rare. Only ask if missing information would change diagnosis, risk, or disposition, and the question must directly relate to the chief complaint/presenting problem. Limit to 1 question per section. Avoid demographics/metadata (age, DOB, gender, insurance, address). Format exactly:\n**Open questions:**\n- Question? (Reason: ...)'
-  const CLINICAL_TONE_RULE =
-    'Write as a psychiatrist preparing for interview: concise, clinical, and focused on what the clinician needs to know. Prefer short labeled lines (Label: content) and compact sentences. Avoid repeating the section title. Use bullets only when the section guidance explicitly calls for a list; no nested lists.'
-
-  const SECTION_RULES: Record<string, string> = {
-    intake_id: 'Include: age/DOB (sex if documented), key psych history, and 1-2 line chief summary. Format as 2-4 labeled lines (e.g., "33-year-old; DOB 05/14/1991", "Key psychiatric history: ...", "Chief summary: ..."). Exclude: meds, labs, ROS, detailed HPI, plan, problem list.',
-    reason_for_visit: 'Include: immediate reason/referral in 1 sentence. No subheaders or bullets. Exclude: timeline, ROS, meds, plan.',
-    hpi: 'Use short labeled lines in this order: Symptom timeline/course; Precipitating factors/stressors; Care episodes; Safety (SI/HI); Substance context (if relevant). 1-2 sentences each. Exclude: treatment plan, med changes, ROS checklist.',
-    interview: 'Use labeled lines: Patient quotes; Self-reported symptoms; Observed/MSE; Measures. 1-2 sentences each. Exclude: historical timeline, plan.',
-    phq9: 'Include: total score, severity label, and date. Then "Elevated items: item (score); item (score)". Avoid bullets.',
-    psych_ros: 'One line per domain with labels (Mood, Anxiety, Psychosis, Safety, Trauma, Substance). Use semicolons; mark "not assessed" if absent. Exclude narrative timeline.',
-    psychiatric_history: 'Short labeled lines; include onset, episode pattern, course. Avoid bullets.',
-    past_psych_history: 'Use labeled lines with semicolons for multiple items (Diagnoses, Hospitalizations, Suicide attempts, Self-harm, Med trials). Avoid bullets unless listing multiple discrete events.',
-    family_psych_history: 'Use 1-2 labeled lines; include family psych, substance use, suicide history only. Exclude patient history.',
-    medical_history: 'Short labeled lines for conditions, surgeries, allergies, non-psych meds. Avoid bullets.',
-    substance_use: 'One line per substance with onset/pattern/last use/quantity; use semicolons. Avoid bullets.',
-    treatment_hx: 'Short labeled lines for therapies/programs and response; include dates if available. Avoid bullets.',
-    medical_ros: 'Non-psych ROS in 1-2 labeled lines. Labs: semicolon-separated inline list of individual tests with values (e.g., "Labs: Na 139; K 4.1; TSH 2.1; UDS THC positive"). Do NOT use panel names like BMP/CBC as labels. Do NOT use a table format. Exclude psych ROS, plan.',
-    social_history: 'Use labeled lines for living, support, education, employment, legal, trauma, functioning. Avoid bullets.',
-    barriers_strengths: 'Two labeled lines only: "Barriers: ..." and "Strengths: ...".',
-    summary_plan: 'Start with "Key highlights: ..." on one line (semicolon-separated). Then 2-4 sentences narrative plan. No bullets.',
-    assessment: 'Start with "Key highlights: ..." on one line (semicolon-separated). Then 2-4 sentences synthesis. No bullets.',
-    problem_list: 'Include: numbered problems with plan per item only. Keep one line per problem when possible. Exclude narrative summary.',
-    followup: 'Use labeled lines for follow-up timing, safety plan, crisis resources, risks discussed. Avoid bullets.',
-    documentation_note: '2-3 sentences listing sources reviewed and interview/collateral. Avoid bullets.',
-    dsm5_analysis: 'Include: DSM-5-TR criteria mapping with cautious language. For each diagnosis, state status (meets/partial/insufficient/provisional) and list criteria evidence, threshold checks, rule-outs, and missing info. Avoid extra headings; use compact labeled lines or short bullets for criteria only.'
-  }
 
   useEffect(() => {
     setModeMenuOpen(false)
@@ -148,7 +123,7 @@ export function App() {
   const hasCaseContent = useMemo(() => {
     if (docs.length > 0) return true
     if (chatThreads.ask.length > 0 || chatThreads.edit.length > 0) return true
-    if (profile.name || profile.mrn || profile.dob) return true
+    if (profile.name || profile.mrn || profile.dob || profile.sex || profile.gender || profile.pronouns) return true
     if (openQuestions.length > 0) return true
     return sections.some(s => Boolean(s.output && s.output.trim()))
   }, [docs.length, chatThreads.ask.length, chatThreads.edit.length, profile, openQuestions.length, sections])
@@ -158,9 +133,15 @@ export function App() {
     [sections, selectedId]
   )
 
+  const hasInterviewNotes = useMemo(() => docs.some(d => d.tag === 'followup'), [docs])
+  
   const visibleSections = useMemo(
-    () => sections.filter(s => !s.hidden),
-    [sections]
+    () => sections.filter(s => {
+      if (s.hidden) return false
+      if (s.visibilityCondition === 'has-interview-notes' && !hasInterviewNotes) return false
+      return true
+    }),
+    [sections, hasInterviewNotes]
   )
 
   useEffect(() => {
@@ -243,15 +224,7 @@ export function App() {
       return prev
     })
   }, [followupSourceLabel, postInterviewManualSource])
-  const profileLine = useMemo(() => {
-    const parts = [
-      profile.name && `Name: ${profile.name}`,
-      profile.mrn && `MRN: ${profile.mrn}`,
-      profile.dob && `DOB: ${profile.dob}`,
-      profile.sex && `Sex/Gender: ${profile.sex}`
-    ]
-    return parts.filter(Boolean).join(' • ')
-  }, [profile])
+  const profileLine = useMemo(() => formatProfile(profile), [profile])
 
   const allChatMessages = useMemo(() => {
     const merged = [...chatThreads.ask, ...chatThreads.edit]
@@ -297,121 +270,7 @@ export function App() {
   const canSend = Boolean(chatInput.trim()) && !chatLoading && !(chatMode === 'edit' && !selectedSection && !selectionSnippet)
 
 
-  function normalizeText(text: string): string {
-    let out = text || ''
-    out = out.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-    for (let i = 0; i < 2; i += 1) {
-      const next = out
-        .replace(/\\\\r\\\\n/g, '\n')
-        .replace(/\\\\n/g, '\n')
-        .replace(/\\\\r/g, '\n')
-        .replace(/\\r\\n/g, '\n')
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\n')
-        .replace(/\\t/g, '\t')
-      if (next === out) break
-      out = next
-    }
-    out = out.replace(/\/n(?=\s|$)/g, '\n')
-    out = out.replace(/\\\n/g, '\n')
-    out = out.replace(/\\\s*$/gm, '')
-    out = out.replace(/\\\*/g, '*')
-    out = out.replace(/\\_/g, '_')
-    return out
-  }
-
-  function normalizeMarkdown(text: string): string {
-    let out = text || ''
-    out = out.replace(/^[ \t]*[•*·–—−‒]\s+/gm, '- ')
-    out = out.replace(/^[ \t]*-\s+/gm, '- ')
-    out = out.replace(/^\s*(\d+)[\).]\s+/gm, (_m, n) => `${n}. `)
-    out = out.replace(/[ \t]+$/gm, '')
-    out = out.replace(/\n{3,}/g, '\n\n')
-    return out
-  }
-
-  function normalizeLabelBold(text: string): string {
-    let out = text || ''
-    out = out.replace(/^\s*\*\*([^*]+)\*\*\s*:\s*/gm, '$1: ')
-    out = out.replace(/^\s*\*\*([^*]+)\*\*\s*$/gm, '$1')
-    out = out.replace(/:\s*\*\*\s*/g, ': ')
-    out = out.replace(/\s*\*\*\s*$/gm, '')
-    return out
-  }
-
-  function normalizeListBlocks(text: string): string {
-    const lines = (text || '').split('\n')
-    const out: string[] = []
-    let inList = false
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i]
-      const trimmed = line.trim()
-      const isCalloutLine = /^(open questions?|key highlights|post[- ]interview notes?)(\s*[:(]|$)/i.test(trimmed)
-      const isListLine = /^(-|–|—|−|‒|\d+\.)\s+/.test(trimmed)
-      const isIndented = /^\s+/.test(line)
-      if (isListLine) {
-        inList = true
-        out.push(line)
-        continue
-      }
-      if (inList && trimmed && !isListLine && (!isIndented || isCalloutLine)) {
-        out.push('')
-        inList = false
-      }
-      if (!trimmed) {
-        inList = false
-      }
-      out.push(line)
-    }
-    return out.join('\n')
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  function formatLabsTableBlock(text: string, _sectionId: string): string {
-    // Labs should now be inline semicolon-separated format per guidance
-    // Table formatting disabled - return text as-is
-    return text
-  }
-
-
-  function cleanDisplayText(text: string): string {
-    return text
-      .split('\n')
-      .filter(line => !/^\s*(\*\*|__|~~)\s*$/.test(line))
-      .join('\n')
-  }
-
-  function stripInlineChunkIds(text: string): string {
-    let out = text
-    // Remove chunk IDs: [uuid_chunk_0], ][uuid_chunk_0], (uuid_chunk_0), etc.
-    // Handles both source_chunk_0 and cd872a3a-85aa-49dd-a7cc-70a924a3c7a9_chunk_0
-    out = out.replace(/\]?\[?[A-Za-z0-9_-]+_chunk_\d+\]?/g, '')
-    // Remove malformed bracket sequences like ][ or ][  ]
-    out = out.replace(/\]\s*\[/g, '')
-    // Clean up leftover semicolons inside parentheses: (; ) or (; ; ) → empty
-    out = out.replace(/\(\s*[;\s]+\s*\)/g, '')
-    // Clean up leftover semicolons inside brackets: [; ] or [; ; ] → empty
-    out = out.replace(/\[\s*[;\s]+\s*\]/g, '')
-    // Remove empty parentheses and brackets
-    out = out.replace(/\(\s*\)/g, '')
-    out = out.replace(/\[\s*\]/g, '')
-    // Clean up trailing semicolons before closing paren/bracket
-    out = out.replace(/;\s*\)/g, ')')
-    out = out.replace(/;\s*\]/g, ']')
-    // Clean up leading semicolons after opening paren/bracket
-    out = out.replace(/\(\s*;/g, '(')
-    out = out.replace(/\[\s*;/g, '[')
-    // Remove orphaned brackets at end of sentences
-    out = out.replace(/\s*\[\s*\.\s*/g, '. ')
-    out = out.replace(/\s*\]\s*\.\s*/g, '. ')
-    // Collapse multiple spaces and trailing whitespace
-    out = out.replace(/[ \t]{2,}/g, ' ')
-    out = out.replace(/\s+\n/g, '\n')
-    // Clean up any remaining orphaned brackets
-    out = out.replace(/\s+\]/g, '')
-    out = out.replace(/\[\s+/g, '')
-    return out
-  }
+  // Text utilities imported from lib/textUtils
 
   function isDemographicQuestion(text: string): boolean {
     return DEMOGRAPHIC_QUESTION_PATTERNS.some(pattern => pattern.test(text))
@@ -625,63 +484,6 @@ export function App() {
     return formatOpenQuestionsBlock([item])
   }
 
-  function insertBeforeOpenQuestionsBlockPreserve(text: string, insert: string): string {
-    const cleanedInsert = insert.trim()
-    if (!cleanedInsert) return text
-    const match = text.match(/(?:^|\n)\s*(?:\*\*)?\s*open\s+questions?\s*:?\s*(?:\*\*)?/i)
-    if (!match || match.index == null) {
-      if (!text) return cleanedInsert
-      const prefix = text.endsWith('\n\n')
-        ? ''
-        : text.endsWith('\n')
-          ? '\n'
-          : '\n\n'
-      return `${text}${prefix}${cleanedInsert}`
-    }
-    const idx = match.index
-    const before = text.slice(0, idx)
-    const after = text.slice(idx)
-    const prefix = before.length === 0
-      ? ''
-      : before.endsWith('\n\n')
-        ? ''
-        : before.endsWith('\n')
-          ? '\n'
-          : '\n\n'
-    const suffix = after.length === 0
-      ? ''
-      : after.startsWith('\n\n')
-        ? ''
-        : after.startsWith('\n')
-          ? '\n'
-          : '\n\n'
-    return `${before}${prefix}${cleanedInsert}${suffix}${after}`
-  }
-
-  function insertAfterOpenQuestionsBlockPreserve(text: string, insert: string): string {
-    const cleanedInsert = insert.trim()
-    if (!cleanedInsert) return text
-    const match = text.match(/(?:^|\n)\s*(?:\*\*)?\s*open\s+questions?\s*:?\s*(?:\*\*)?/i)
-    if (!match || match.index == null) {
-      if (!text) return cleanedInsert
-      const prefix = text.endsWith('\n\n')
-        ? ''
-        : text.endsWith('\n')
-          ? '\n'
-          : '\n\n'
-      return `${text}${prefix}${cleanedInsert}`
-    }
-    const idx = match.index
-    const afterHeader = text.slice(idx + match[0].length)
-    const parts = afterHeader.split(/\n\s*\n/)
-    const block = parts[0] || ''
-    const rest = parts.slice(1).join('\n\n').trim()
-    const before = text.slice(0, idx).trimEnd()
-    const openBlock = (text.slice(idx, idx + match[0].length) + block).trim()
-    const segments = [before, openBlock, cleanedInsert, rest].filter(Boolean)
-    return segments.join('\n\n')
-  }
-
   function appendPostInterviewNoteAtEnd(text: string, noteBlock: string): string {
     const cleaned = text.trim()
     if (!cleaned) return noteBlock
@@ -769,7 +571,6 @@ export function App() {
     out = normalizeOpenQuestionsBlock(out)
     out = sanitizeOpenQuestionsBlock(out, sectionId)
     out = moveOpenQuestionsToEnd(out)
-    out = formatLabsTableBlock(out, sectionId)
     out = normalizeListBlocks(out)
     if (options?.stripChunkIds !== false) {
       out = stripInlineChunkIds(out)
@@ -857,6 +658,7 @@ export function App() {
     const used = new Set<string>()
     const merged: TemplateSection[] = []
 
+    // Only include sections that exist in current template
     for (const entry of saved) {
       const base = defaultMap.get(entry.id)
       if (base) {
@@ -867,20 +669,12 @@ export function App() {
           output,
           citations: entry.citations || base.citations
         })
-      } else {
-        const output = formatSectionText(entry.output || '', entry.id)
-        merged.push({
-          id: entry.id,
-          title: entry.title || 'Untitled',
-          guidance: entry.guidance || '',
-          output,
-          citations: entry.citations,
-          hidden: entry.hidden
-        })
+        used.add(entry.id)
       }
-      used.add(entry.id)
+      // Skip sections that no longer exist in template (e.g., removed sections)
     }
 
+    // Add any new template sections not in saved data
     for (const def of defaults) {
       if (!used.has(def.id)) {
         merged.push(def)
@@ -1324,14 +1118,12 @@ export function App() {
     })
     setGeneratingIds(prev => ({ ...prev, [section.id]: true }))
     setEditingSectionId(prev => (prev === section.id ? null : prev))
-    const guardrails = SECTION_RULES[section.id]
-    const baseGuidance = guardrails ? `${section.guidance}\nConstraints: ${guardrails}` : section.guidance
     const updateHint = options?.updateNote ? `\nUpdate note: ${options.updateNote}` : ''
     const allowOpenQuestions = allowOpenQuestionsForSection(section.id)
     const openQuestionGuidance = allowOpenQuestions
       ? OPEN_QUESTION_RULES
       : 'Do not include open questions in this section.'
-    const promptGuidance = `${baseGuidance}\n${CLINICAL_TONE_RULE}\n${openQuestionGuidance}${updateHint}`
+    const promptGuidance = `${section.guidance}\n${openQuestionGuidance}${updateHint}`
     const sectionPrompt = section.id === 'dsm5_analysis'
       ? { ...section, guidance: `${promptGuidance} Use DSM criteria only as reference; do not present DSM criteria as patient facts. Cite patient evidence for symptom claims.` }
       : { ...section, guidance: promptGuidance }
@@ -1358,7 +1150,20 @@ export function App() {
       }
       return selected
     }
+    
+    // Build DSM context for substance use and plan sections
+    const DSM_ENHANCED_SECTIONS = ['substance_use', 'problem_list', 'dsm5_analysis']
+    const buildDsmContext = async (): Promise<string> => {
+      if (!DSM_ENHANCED_SECTIONS.includes(section.id)) return ''
+      const dsmIndex = await ensureDsmIndex()
+      if (!dsmIndex || dsmIndex.length === 0) return ''
+      const query = `${sectionPrompt.title} ${sectionPrompt.guidance}\n${buildDsmQuery(sections)}`
+      const matches = rankDsmEntries(query, dsmIndex, 4)
+      return formatDsmEntries(matches)
+    }
+    
     const evidence = await buildEvidence(evidenceLimit)
+    const dsmContext = await buildDsmContext()
     const otherSectionsContext = buildOtherSectionsContext(section.id)
     const openQuestionsContext = settings.showOpenQuestions ? buildOpenQuestionsContext(section.id) : ''
     const combinedContext = [otherSectionsContext, openQuestionsContext].filter(Boolean).join('\n\n')
@@ -1426,7 +1231,7 @@ export function App() {
             ...currentPrompt,
             guidance: `${currentPrompt.guidance}\nSTRICT: Every statement must have a citation. If you cannot cite, return an empty text.`
           }
-          const retry = await generateSectionWithOpenAI(retryPrompt, currentEvidence, settings, undefined, combinedContext)
+          const retry = await generateSectionWithOpenAI(retryPrompt, currentEvidence, settings, undefined, combinedContext, dsmContext)
           const retryText = formatSectionText(retry.text, section.id, { stripChunkIds: false })
           const retryFinal = stripInlineChunkIds(retryText)
           if (retryText.trim().length > 0 && (retry.citations || []).length > 0) {
@@ -1463,7 +1268,8 @@ export function App() {
               setStreamingPreviews(prev => ({ ...prev, [section.id]: streamingBuffer }))
             }
           : undefined,
-        combinedContext
+        combinedContext,
+        dsmContext
       )
       const ok = await finalizeGenerated(generated, evidence, sectionPrompt, { silent: mode === 'replace' })
       if (!ok && mode === 'replace') {
@@ -1474,17 +1280,8 @@ export function App() {
           guidance: `${sectionPrompt.guidance}\nSTRICT: If you return any text, citations must be non-empty. Return a shorter output if needed.`
         }
         try {
-          const retry = await generateSectionWithOpenAI(recoveryPrompt, expandedEvidence, settings, undefined, combinedContext)
-          const expandedOk = await finalizeGenerated(retry, expandedEvidence, recoveryPrompt)
-          if (!expandedOk && (settings.model || '').startsWith('gpt-5')) {
-            const fallbackSettings = { ...settings, model: 'gpt-4o-mini' }
-            try {
-              const fallback = await generateSectionWithOpenAI(recoveryPrompt, expandedEvidence, fallbackSettings, undefined, combinedContext)
-              await finalizeGenerated(fallback, expandedEvidence, recoveryPrompt)
-            } catch {
-              // fall through
-            }
-          }
+          const retry = await generateSectionWithOpenAI(recoveryPrompt, expandedEvidence, settings, undefined, combinedContext, dsmContext)
+          await finalizeGenerated(retry, expandedEvidence, recoveryPrompt)
         } catch {
           // fall through
         }
@@ -1494,7 +1291,7 @@ export function App() {
       console.error(message)
       if (mode === 'replace') {
         try {
-          const fallback = await generateSectionWithOpenAI(sectionPrompt, evidence, settings, undefined, combinedContext)
+          const fallback = await generateSectionWithOpenAI(sectionPrompt, evidence, settings, undefined, combinedContext, dsmContext)
           await finalizeGenerated(fallback, evidence, sectionPrompt)
           return
         } catch (fallbackErr) {
@@ -1720,10 +1517,7 @@ export function App() {
           const current = visibleSections[idx]
           idx += 1
           const priorOutput = (current.output || '').trim()
-          const baseGuidance = SECTION_RULES[current.id]
-            ? `${current.guidance}\nConstraints: ${SECTION_RULES[current.id]}`
-            : current.guidance
-          const addendumGuidance = `${baseGuidance}\n${CLINICAL_TONE_RULE}\n${updateNote}\nWrite ONLY a concise post-interview addendum (1-3 sentences or short labeled lines). Do NOT rewrite or restate existing content. Do NOT include open questions. If no new information exists, return empty text and empty citations.`
+          const addendumGuidance = `${current.guidance}\n${updateNote}\nWrite ONLY a concise post-interview addendum (1-3 sentences or short labeled lines). Do NOT rewrite or restate existing content. Do NOT include open questions. If no new information exists, return empty text and empty citations.`
           const promptSection: TemplateSection = { ...current, guidance: addendumGuidance }
           let evidence = rankEvidenceDiverse(
             `${promptSection.title} ${promptSection.guidance}`,
@@ -2631,7 +2425,12 @@ export function App() {
                 {docs.map(doc => (
                   <div key={doc.id} className="case-item" onClick={() => setPreviewDoc(doc)}>
                     <FileText size={14} className={`flex-shrink-0 file-type-${doc.kind}`} />
-                    <span className="flex-1 truncate text-xs">{doc.name}</span>
+                    <div className="flex-1 min-w-0">
+                      <span className="truncate text-xs block">{doc.name}</span>
+                      {doc.documentType && doc.documentType !== 'other' && (
+                        <span className="doc-type-badge">{doc.documentType.replace('-', ' ')}</span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2663,6 +2462,7 @@ export function App() {
         {/* Header bar - slim */}
         <header className="header-bar flex items-center px-3 gap-2">
           <div className="flex-1 flex items-center gap-2 min-w-0">
+            <span className="eval-context-label">Preparing for psychiatric evaluation</span>
             <div className="patient-badge">
               <input
                 className="patient-input name"
@@ -2687,9 +2487,23 @@ export function App() {
               <span className="patient-sep" />
               <input
                 className="patient-input"
-                placeholder="Sex/Gender"
+                placeholder="Sex"
                 value={profile.sex || ''}
                 onChange={e => setProfile({ ...profile, sex: e.target.value })}
+              />
+              <span className="patient-sep" />
+              <input
+                className="patient-input"
+                placeholder="Gender"
+                value={profile.gender || ''}
+                onChange={e => setProfile({ ...profile, gender: e.target.value })}
+              />
+              <span className="patient-sep" />
+              <input
+                className="patient-input"
+                placeholder="Pronouns"
+                value={profile.pronouns || ''}
+                onChange={e => setProfile({ ...profile, pronouns: e.target.value })}
               />
               {lastSavedAt && (
                 <>
@@ -2812,6 +2626,11 @@ export function App() {
                   >
                     <div className="section-row-header">
                       <h3 className="section-label">{section.title}</h3>
+                      {section.clinicianOnly && (
+                        <span className="clinician-only-badge" title="Clinician only - Do not copy forward">
+                          <Lock size={8} />
+                        </span>
+                      )}
                       {hasContent && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]" />}
                       {isGenerating && <Loader2 size={10} className="animate-spin text-[var(--color-maple)]" />}
                       {citationCount > 0 && <span className="section-cite">[{citationCount}]</span>}

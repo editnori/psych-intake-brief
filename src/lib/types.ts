@@ -9,6 +9,9 @@ export interface SourceDoc {
   chunks: Chunk[]
   warnings?: string[]
   error?: string
+  documentType?: 'discharge-summary' | 'psych-eval' | 'progress-note' | 'biopsychosocial' | 'intake' | 'other'
+  episodeDate?: string
+  chronologicalOrder?: number
 }
 
 export interface Chunk {
@@ -34,6 +37,9 @@ export interface TemplateSection {
   output?: string
   citations?: Citation[]
   hidden?: boolean
+  visibilityCondition?: 'always' | 'has-interview-notes' | 'clinician-only'
+  clinicianOnly?: boolean
+  doNotCopyForward?: boolean
 }
 
 export interface PatientProfile {
@@ -41,6 +47,8 @@ export interface PatientProfile {
   mrn: string
   dob: string
   sex?: string
+  gender?: string
+  pronouns?: string
 }
 
 export interface OpenQuestion {
@@ -104,6 +112,8 @@ export interface StoredDoc {
   text: string
   tag?: SourceDoc['tag']
   addedAt?: number
+  documentType?: SourceDoc['documentType']
+  episodeDate?: string
 }
 
 export interface CaseState {
@@ -111,7 +121,7 @@ export interface CaseState {
   savedAt: number
   profile: PatientProfile
   docs: StoredDoc[]
-  sections: Array<Pick<TemplateSection, 'id' | 'title' | 'guidance' | 'output' | 'citations' | 'hidden'>>
+  sections: Array<Pick<TemplateSection, 'id' | 'title' | 'guidance' | 'output' | 'citations' | 'hidden' | 'visibilityCondition' | 'clinicianOnly' | 'doNotCopyForward'>>
   chat: ChatThreads
   openQuestions?: OpenQuestion[]
   lastGeneratedAt?: number

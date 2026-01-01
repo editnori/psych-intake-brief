@@ -339,21 +339,107 @@ async function streamResponse(
   return { content: fullContent, finished }
 }
 
+// Sections that should include DSM criteria context
+const DSM_ENHANCED_SECTIONS = ['substance_use', 'problem_list', 'dsm5_analysis']
+
+// OpenAI API endpoint - single source of truth
+const OPENAI_API_URL = 'https://api.openai.com/v1/responses'
+
+// Default model - locked to gpt-5.2
+const DEFAULT_MODEL = 'gpt-5.2'
+
+interface OpenAIRequestOptions {
+  instructions: string
+  input: string
+  maxTokens?: number
+  jsonSchema?: object
+  stream?: boolean
+  onDelta?: (text: string) => void
+}
+
+/**
+ * Base function for making OpenAI API calls
+ * Consolidates common patterns: URL, model, auth, reasoning/verbosity settings
+ */
+async function callOpenAI(
+  settings: AppSettings,
+  options: OpenAIRequestOptions
+): Promise<string> {
+  if (!settingsReady(settings)) {
+    throw new Error('OpenAI API key not configured')
+  }
+
+  const payload: any = {
+    model: DEFAULT_MODEL,
+    instructions: options.instructions,
+    input: options.input,
+    store: false,
+    text: {
+      format: options.jsonSchema || { type: 'json_object' }
+    },
+    max_output_tokens: options.maxTokens || 2000,
+    stream: Boolean(options.stream && options.onDelta)
+  }
+
+  // GPT-5.2 always supports reasoning and verbosity
+  if (settings.reasoningEffort !== 'none') {
+    payload.reasoning = { effort: settings.reasoningEffort }
+  }
+  payload.text.verbosity = settings.verbosity
+
+  const response = await fetch(OPENAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${settings.openaiApiKey}`
+    },
+    body: JSON.stringify(payload)
+  })
+
+  if (!response.ok) {
+    let errorDetail = ''
+    try {
+      const errorBody = await response.json()
+      errorDetail = errorBody?.error?.message || JSON.stringify(errorBody)
+    } catch {
+      errorDetail = await response.text().catch(() => '')
+    }
+    throw new Error(`OpenAI error: ${response.status} - ${errorDetail}`)
+  }
+
+  if (options.stream && options.onDelta) {
+    let jsonBuffer = ''
+    let lastEmittedLength = 0
+    
+    const streamResult = await streamResponse(response, (delta) => {
+      jsonBuffer += delta
+      const textFragment = extractJsonField(jsonBuffer, 'text', true)
+      if (textFragment !== null) {
+        const unescaped = unescapeJsonString(textFragment)
+        if (unescaped.length > lastEmittedLength) {
+          const newText = unescaped.slice(lastEmittedLength)
+          options.onDelta!(newText)
+          lastEmittedLength = unescaped.length
+        }
+      }
+    })
+    
+    return streamResult.content || jsonBuffer
+  } else {
+    const data = await response.json()
+    return extractOutputText(data)
+  }
+}
+
 export async function generateSectionWithOpenAI(
   section: TemplateSection,
   evidence: Chunk[],
   settings: AppSettings,
   onDelta?: (text: string) => void,
-  context?: string
+  context?: string,
+  dsmContext?: string
 ): Promise<GeneratedSection> {
-  if (!settingsReady(settings)) {
-    throw new Error('OpenAI API key not configured')
-  }
-
-  const url = 'https://api.openai.com/v1/responses'
   const evidenceText = buildEvidenceContext(evidence)
-  const model = settings.model || 'gpt-5.2'
-  const isGpt5 = model.startsWith('gpt-5')
 
   const openQuestionsBlock = settings.showOpenQuestions ? `
 
@@ -371,43 +457,38 @@ Rules for open questions:
 - If documentation says "denies" or "unknown," that's an answer—don't re-ask
 - Each question must specify how the answer would change assessment or plan` : ''
 
-  const instructions = `Role: Clinical chart summarizer for psychiatric intake preparation.
+  const instructions = `Role: Psychiatrist preparing colleague for patient interview.
 
-Output: Valid JSON only. Keys: text, citations.
+Output: JSON with keys: text, citations.
 
-Writing style:
-- Write as a psychiatrist preparing a colleague for patient interview
-- Use active voice, direct statements, specific clinical terms
-- Avoid: hedging phrases, meta-commentary, parallel structures, filler words
-- Bad: "The patient presents with symptoms that appear to be consistent with..."
-- Good: "Reports 2-week insomnia, anhedonia, passive SI without plan."
-- No introductory phrases like "Based on the evidence" or "According to documentation"
-- State facts directly; omit if unsupported
+Style:
+- Active voice, direct clinical language
+- No hedging ("appears to", "seems like") or meta-commentary ("Based on evidence...")
+- Default: short labeled lines (Label: content)
+- Dates: MM/YYYY or "3 months ago"; Meds: Drug dose frequency
 
-Section formatting:
-- Do not repeat the section title
-- Prefer short labeled lines (Label: content); keep labels minimal
-- Use bullets only when the section guidance explicitly calls for a list
-- Avoid nested lists and markdown headers (#)
-- If the guidance includes \"Example:\", follow that format (do not copy verbatim)
-- For symptom lists, use brief notation: "SI: passive, no plan; HI: denies"
-- Dates format: MM/YYYY or "3 months ago" — avoid vague "recently"
-- Medication format: Drug dose frequency (e.g., "Sertraline 100mg daily")
-- Return the complete requested output only (no deltas, no commentary); if no update is warranted, return empty text and empty citations
+DSM-5 notation:
+- [+] criterion met (documented)
+- [-] criterion not met (documented negative)
+- [?] unknown/not assessed
+- [p] partial/subthreshold
+- Specifier chain: [Disorder], [severity], [course], [features]
+- SUD severity: mild (2-3 criteria), moderate (4-5), severe (6+)
 
-Evidence rules:
-- Every factual statement requires a citation
-- Use chunkId exactly as shown in brackets (e.g., source_chunk_0)
-- If no citation possible, omit the statement entirely
-- Empty citations array → return empty text
-- Excerpt: optional, ≤20 words, no quotes
+Evidence:
+- Every fact requires citation [chunkId]
+- Omit unsupported statements
+- Excerpt: optional, ≤20 words
 
-Section boundaries:
-- Do NOT repeat facts from other sections
+Sections:
 - Follow section guidance exactly
-- Each section covers distinct clinical territory${openQuestionsBlock}`
+- Do not repeat content across sections${openQuestionsBlock}`
 
-  const user = `Section: ${section.title}\nGuidance: ${section.guidance}\n\n${context ? `Other section summaries (for de-dup only; do NOT reuse or cite):\n${context}\n\n` : ''}Evidence:\n${evidenceText}\n\nReturn JSON with keys:\n- text: string\n- citations: array of { chunkId, excerpt }`
+  const dsmBlock = dsmContext && DSM_ENHANCED_SECTIONS.includes(section.id)
+    ? `\nDSM-5 Reference (use for diagnostic criteria mapping, not as citation source):\n${dsmContext}\n`
+    : ''
+
+  const user = `Section: ${section.title}\nGuidance: ${section.guidance}\n\n${context ? `Other section summaries (for de-dup only; do NOT reuse or cite):\n${context}\n\n` : ''}${dsmBlock}Evidence:\n${evidenceText}\n\nReturn JSON with keys:\n- text: string\n- citations: array of { chunkId, excerpt }`
 
   const jsonSchema = {
     type: 'json_schema',
@@ -425,7 +506,7 @@ Section boundaries:
               chunkId: { type: 'string' },
               excerpt: { type: 'string' }
             },
-            required: ['chunkId'],
+            required: ['chunkId', 'excerpt'],
             additionalProperties: false
           }
         }
@@ -435,66 +516,14 @@ Section boundaries:
     }
   }
 
-  const textFormat = model.startsWith('gpt-4o') ? jsonSchema : { type: 'json_object' }
-
-  const payload: any = {
-    model,
+  const content = await callOpenAI(settings, {
     instructions,
     input: user,
-    store: false,
-    text: {
-      format: textFormat
-    },
-    max_output_tokens: 2000,
-    stream: Boolean(onDelta)
-  }
-
-  if (isGpt5) {
-    if (settings.reasoningEffort !== 'none') {
-      payload.reasoning = { effort: settings.reasoningEffort }
-    }
-    payload.text.verbosity = settings.verbosity
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${settings.openaiApiKey}`
-    },
-    body: JSON.stringify(payload)
+    maxTokens: 2000,
+    jsonSchema,
+    stream: Boolean(onDelta),
+    onDelta
   })
-
-  if (!response.ok) {
-    throw new Error(`OpenAI error: ${response.status}`)
-  }
-
-  let content = ''
-  if (onDelta) {
-    let jsonBuffer = ''
-    let lastEmittedLength = 0
-    
-    const streamResult = await streamResponse(response, (delta) => {
-      jsonBuffer += delta
-      // Extract the text field from partial JSON and emit only new content
-      const textFragment = extractJsonField(jsonBuffer, 'text', true)
-      if (textFragment !== null) {
-        const unescaped = unescapeJsonString(textFragment)
-        // Only emit the new portion of text since last emit
-        if (unescaped.length > lastEmittedLength) {
-          const newText = unescaped.slice(lastEmittedLength)
-          onDelta(newText)
-          lastEmittedLength = unescaped.length
-        }
-      }
-    })
-    
-    // Use final content from stream if available, otherwise use accumulated buffer
-    content = streamResult.content || jsonBuffer
-  } else {
-    const data = await response.json()
-    content = extractOutputText(data)
-  }
 
   const parsed = coerceModelPayload(content)
   const citations = mapCitations(parsed.citations, evidence)
@@ -507,14 +536,7 @@ export async function askWithOpenAI(
   evidence: Chunk[],
   settings: AppSettings
 ): Promise<GeneratedSection> {
-  if (!settingsReady(settings)) {
-    throw new Error('OpenAI API key not configured')
-  }
-
-  const url = 'https://api.openai.com/v1/responses'
   const evidenceText = buildEvidenceContext(evidence, 8000)
-  const model = settings.model || 'gpt-5.2'
-  const isGpt5 = model.startsWith('gpt-5')
 
   const instructions = `Role: Clinical Q&A for chart review.
 
@@ -544,7 +566,7 @@ Output: Valid JSON with keys: text, citations`
               chunkId: { type: 'string' },
               excerpt: { type: 'string' }
             },
-            required: ['chunkId'],
+            required: ['chunkId', 'excerpt'],
             additionalProperties: false
           }
         }
@@ -554,57 +576,13 @@ Output: Valid JSON with keys: text, citations`
     }
   }
 
-  const textFormat = model.startsWith('gpt-4o') || model.startsWith('gpt-5')
-    ? jsonSchema
-    : { type: 'json_object' }
-
-  const payload: any = {
-    model,
+  const content = await callOpenAI(settings, {
     instructions,
     input: user,
-    store: false,
-    text: { format: textFormat },
-    max_output_tokens: 400
-  }
-
-  if (isGpt5) {
-    if (settings.reasoningEffort !== 'none') {
-      payload.reasoning = { effort: settings.reasoningEffort }
-    }
-    payload.text.verbosity = settings.verbosity
-  }
-
-  const send = async (body: any) => fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${settings.openaiApiKey}`
-    },
-    body: JSON.stringify(body)
+    maxTokens: 400,
+    jsonSchema
   })
 
-  let response = await send(payload)
-  if (!response.ok && response.status === 400) {
-    const fallbackFormat = textFormat.type === 'json_object' ? jsonSchema : { type: 'json_object' }
-    const fallbackPayload = { ...payload, text: { ...payload.text, format: fallbackFormat } }
-    response = await send(fallbackPayload)
-  }
-
-  if (!response.ok) {
-    let detail = ''
-    try {
-      const errText = await response.text()
-      const parsed = safeJsonParse<any>(errText)
-      detail = parsed?.error?.message || parsed?.message || errText
-    } catch {
-      detail = ''
-    }
-    const suffix = detail ? ` - ${detail}` : ''
-    throw new Error(`OpenAI error: ${response.status}${suffix}`)
-  }
-
-  const data = await response.json()
-  const content = extractOutputText(data)
   const parsed = coerceModelPayload(content)
   const citations = mapCitations(parsed.citations, evidence)
 
@@ -619,14 +597,7 @@ export async function editWithOpenAI(
   settings: AppSettings,
   options?: { scope?: 'selection' | 'section' }
 ): Promise<GeneratedSection> {
-  if (!settingsReady(settings)) {
-    throw new Error('OpenAI API key not configured')
-  }
-
-  const url = 'https://api.openai.com/v1/responses'
   const evidenceText = buildEvidenceContext(evidence, 8000)
-  const model = settings.model || 'gpt-5.2'
-  const isGpt5 = model.startsWith('gpt-5')
 
   const scopeLine = options?.scope === 'selection'
     ? '- Return ONLY the revised excerpt (no labels, no extra sentences).'
@@ -667,7 +638,7 @@ Output: Valid JSON with keys: text, citations`
               chunkId: { type: 'string' },
               excerpt: { type: 'string' }
             },
-            required: ['chunkId'],
+            required: ['chunkId', 'excerpt'],
             additionalProperties: false
           }
         }
@@ -677,57 +648,13 @@ Output: Valid JSON with keys: text, citations`
     }
   }
 
-  const textFormat = model.startsWith('gpt-4o') || model.startsWith('gpt-5')
-    ? jsonSchema
-    : { type: 'json_object' }
-
-  const payload: any = {
-    model,
+  const content = await callOpenAI(settings, {
     instructions,
     input: user,
-    store: false,
-    text: { format: textFormat },
-    max_output_tokens: 400
-  }
-
-  if (isGpt5) {
-    if (settings.reasoningEffort !== 'none') {
-      payload.reasoning = { effort: settings.reasoningEffort }
-    }
-    payload.text.verbosity = settings.verbosity
-  }
-
-  const send = async (body: any) => fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${settings.openaiApiKey}`
-    },
-    body: JSON.stringify(body)
+    maxTokens: 400,
+    jsonSchema
   })
 
-  let response = await send(payload)
-  if (!response.ok && response.status === 400) {
-    const fallbackFormat = textFormat.type === 'json_object' ? jsonSchema : { type: 'json_object' }
-    const fallbackPayload = { ...payload, text: { ...payload.text, format: fallbackFormat } }
-    response = await send(fallbackPayload)
-  }
-
-  if (!response.ok) {
-    let detail = ''
-    try {
-      const errText = await response.text()
-      const parsed = safeJsonParse<any>(errText)
-      detail = parsed?.error?.message || parsed?.message || errText
-    } catch {
-      detail = ''
-    }
-    const suffix = detail ? ` - ${detail}` : ''
-    throw new Error(`OpenAI error: ${response.status}${suffix}`)
-  }
-
-  const data = await response.json()
-  const content = extractOutputText(data)
   const parsed = coerceModelPayload(content)
   const citations = mapCitations(parsed.citations, evidence)
 
@@ -739,14 +666,9 @@ export async function recoverCitationsWithOpenAI(
   evidence: Chunk[],
   settings: AppSettings
 ): Promise<Citation[]> {
-  if (!settingsReady(settings)) {
-    throw new Error('OpenAI API key not configured')
-  }
   if (!text.trim() || evidence.length === 0) return []
 
-  const url = 'https://api.openai.com/v1/responses'
   const evidenceText = buildEvidenceContext(evidence)
-  const model = settings.model || 'gpt-5.2'
 
   const instructions = `Role: Citation recovery for clinical summary.
 
@@ -760,30 +682,12 @@ Rules:
 Output: Valid JSON with key: citations`
   const user = `Summary:\n${text}\n\nEvidence:\n${evidenceText}\n\nReturn JSON with key: citations.`
 
-  const payload: any = {
-    model,
+  const content = await callOpenAI(settings, {
     instructions,
     input: user,
-    store: false,
-    text: { format: { type: 'json_object' } },
-    max_output_tokens: 300
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${settings.openaiApiKey}`
-    },
-    body: JSON.stringify(payload)
+    maxTokens: 300
   })
 
-  if (!response.ok) {
-    throw new Error(`OpenAI error: ${response.status}`)
-  }
-
-  const data = await response.json()
-  const content = extractOutputText(data)
   const parsed = coerceModelPayload(content)
   return mapCitations(parsed.citations, evidence)
 }
@@ -792,14 +696,6 @@ export async function reviewSummaryWithOpenAI(
   sections: TemplateSection[],
   settings: AppSettings
 ): Promise<ReviewChange[]> {
-  if (!settingsReady(settings)) {
-    throw new Error('OpenAI API key not configured')
-  }
-
-  const url = 'https://api.openai.com/v1/responses'
-  const model = settings.model || 'gpt-5.2'
-  const isGpt5 = model.startsWith('gpt-5')
-
   const maxChars = 9000
   const body = sections
     .map(s => {
@@ -827,35 +723,14 @@ Edit rules:
 
 Output: Valid JSON with key: changes (array of {sectionId, revisedText, issue})`
 
-  const payload: any = {
-    model,
+  // Use higher reasoning effort for review
+  const reviewSettings: AppSettings = { ...settings, reasoningEffort: 'high' }
+  const content = await callOpenAI(reviewSettings, {
     instructions,
     input: `Sections:\n${summary}\n\nReturn JSON now.`,
-    store: false,
-    text: { format: { type: 'json_object' } },
-    max_output_tokens: 600
-  }
-
-  if (isGpt5) {
-    payload.reasoning = { effort: 'xhigh' }
-    payload.text.verbosity = settings.verbosity
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${settings.openaiApiKey}`
-    },
-    body: JSON.stringify(payload)
+    maxTokens: 600
   })
 
-  if (!response.ok) {
-    throw new Error(`OpenAI error: ${response.status}`)
-  }
-
-  const data = await response.json()
-  const content = extractOutputText(data)
   const parsed = safeJsonParse<any>(content) || {}
   const changes = Array.isArray(parsed.changes)
     ? parsed.changes.filter((c: any) => c && typeof c.sectionId === 'string' && typeof c.revisedText === 'string')
@@ -882,15 +757,9 @@ export async function answerOpenQuestionsWithOpenAI(
   evidence: Chunk[],
   settings: AppSettings
 ): Promise<OpenQuestionAnswerPayload[]> {
-  if (!settingsReady(settings)) {
-    throw new Error('OpenAI API key not configured')
-  }
   if (questions.length === 0) return []
 
-  const url = 'https://api.openai.com/v1/responses'
   const evidenceText = buildEvidenceContext(evidence)
-  const model = settings.model || 'gpt-5.2'
-  const isGpt5 = model.startsWith('gpt-5')
 
   const instructions = `Role: Answer clinical questions from chart evidence.
 
@@ -905,37 +774,12 @@ Output: Valid JSON with key: answers (array of {id, text, citations})`
   const list = questions.map(q => `- (${q.id}) ${q.text}`).join('\n')
   const user = `Questions:\n${list}\n\nEvidence:\n${evidenceText}\n\nReturn JSON now.`
 
-  const payload: any = {
-    model,
+  const content = await callOpenAI(settings, {
     instructions,
     input: user,
-    store: false,
-    text: { format: { type: 'json_object' } },
-    max_output_tokens: 800
-  }
-
-  if (isGpt5) {
-    if (settings.reasoningEffort !== 'none') {
-      payload.reasoning = { effort: settings.reasoningEffort }
-    }
-    payload.text.verbosity = settings.verbosity
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${settings.openaiApiKey}`
-    },
-    body: JSON.stringify(payload)
+    maxTokens: 800
   })
 
-  if (!response.ok) {
-    throw new Error(`OpenAI error: ${response.status}`)
-  }
-
-  const data = await response.json()
-  const content = extractOutputText(data)
   const parsed = safeJsonParse<any>(content) || {}
   const answers = Array.isArray(parsed.answers) ? parsed.answers : []
 

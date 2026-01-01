@@ -333,12 +333,92 @@ export function Markdown({ text, className }: Props) {
           li.classList.add('post-interview-source')
         }
       }
+
+      // Handle "Open questions:" embedded within list items
+      // This catches cases where the model outputs inline callouts in lists
+      const extractInlineCallouts = () => {
+        const listItems = Array.from(doc.body.querySelectorAll('li'))
+        for (const li of listItems) {
+          // Skip if already in a callout
+          if (li.closest('.open-questions, .key-highlights, .post-interview')) continue
+          
+          const html = li.innerHTML
+          // Match **Open questions:** or <strong>Open questions:</strong> inline
+          const openQMatch = html.match(/(<strong>Open questions:?<\/strong>|(?<![a-z])Open questions:)\s*/i)
+          if (!openQMatch) continue
+          
+          const matchIndex = openQMatch.index!
+          const matchLength = openQMatch[0].length
+          
+          // Content before the callout marker
+          const beforeContent = html.slice(0, matchIndex).trim()
+          // Content after the callout marker (the actual question)
+          const afterContent = html.slice(matchIndex + matchLength).trim()
+          
+          // Update the list item with only the before content
+          if (beforeContent) {
+            li.innerHTML = beforeContent
+          } else {
+            // If nothing before, remove the list item
+            li.remove()
+          }
+          
+          // Create the open questions callout
+          const wrapper = doc.createElement('div')
+          wrapper.className = 'open-questions'
+          const title = doc.createElement('div')
+          title.className = 'oq-title'
+          title.textContent = 'Open questions'
+          wrapper.appendChild(title)
+          
+          // Add the after content as the question
+          if (afterContent) {
+            const questionP = doc.createElement('p')
+            questionP.innerHTML = afterContent
+            wrapper.appendChild(questionP)
+          }
+          
+          // Find the parent list and insert the callout after it
+          const parentList = li.closest('ul, ol')
+          if (parentList) {
+            // Get subsequent list items after this one and move them into the callout
+            let nextSibling = li.nextElementSibling
+            const questionsToMove: Element[] = []
+            while (nextSibling && nextSibling.tagName.toLowerCase() === 'li') {
+              questionsToMove.push(nextSibling)
+              nextSibling = nextSibling.nextElementSibling
+            }
+            
+            if (questionsToMove.length > 0) {
+              const questionList = doc.createElement('ul')
+              for (const q of questionsToMove) {
+                q.remove()
+                questionList.appendChild(q)
+              }
+              wrapper.appendChild(questionList)
+            }
+            
+            // Insert the callout after the parent list
+            parentList.parentNode?.insertBefore(wrapper, parentList.nextSibling)
+          }
+        }
+      }
+      
+      extractInlineCallouts()
+
       return doc.body.innerHTML
     }
 
     out = wrapCalloutBlocks(out)
 
-    return DOMPurify.sanitize(out, { ADD_ATTR: ['class'], ADD_TAGS: ['mark'] })
+    // DSM-5 criteria notation styling: [+], [-], [?], [p]
+    // Convert to styled spans for visual distinction
+    out = out.replace(/\[(\+)\]/g, '<span class="dsm-badge dsm-met" title="Criterion met">[+]</span>')
+    out = out.replace(/\[(-)\]/g, '<span class="dsm-badge dsm-not-met" title="Criterion not met">[-]</span>')
+    out = out.replace(/\[(\?)\]/g, '<span class="dsm-badge dsm-unknown" title="Unknown/not assessed">[?]</span>')
+    out = out.replace(/\[(p)\]/gi, '<span class="dsm-badge dsm-partial" title="Partial/subthreshold">[p]</span>')
+
+    return DOMPurify.sanitize(out, { ADD_ATTR: ['class', 'title'], ADD_TAGS: ['mark'] })
   }, [text])
 
   return (

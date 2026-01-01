@@ -1,0 +1,369 @@
+\documentclass[11pt,letterpaper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{mathpazo}           % Palatino font
+\usepackage{microtype}          % Better typography
+\usepackage{graphicx}           % Images
+\usepackage{xcolor}             % Colors
+\usepackage{booktabs}           % Better tables
+\usepackage{fancyhdr}           % Headers/footers
+\usepackage{titlesec}           % Section formatting
+\usepackage{geometry}           % Page margins
+\usepackage{hyperref}           % Hyperlinks
+\usepackage{listings}           % Code listings
+\usepackage{enumitem}           % List formatting
+\usepackage{caption}            % Caption formatting
+\usepackage{float}              % Figure placement
+\usepackage{parskip}            % Paragraph spacing
+
+% Page geometry
+\geometry{
+    letterpaper,
+    margin=1in,
+    headheight=14pt
+}
+
+% Colors
+\definecolor{primary}{RGB}{44, 62, 80}
+\definecolor{secondary}{RGB}{52, 73, 94}
+\definecolor{accent}{RGB}{41, 128, 185}
+\definecolor{codebg}{RGB}{248, 248, 248}
+\definecolor{codeframe}{RGB}{220, 220, 220}
+
+% Hyperlink styling
+\hypersetup{
+    colorlinks=true,
+    linkcolor=accent,
+    urlcolor=accent,
+    citecolor=accent
+}
+
+% Section formatting
+\titleformat{\section}
+    {\Large\bfseries\color{primary}}
+    {\thesection}{1em}{}
+\titleformat{\subsection}
+    {\large\bfseries\color{secondary}}
+    {\thesubsection}{1em}{}
+\titleformat{\subsubsection}
+    {\normalsize\bfseries\color{secondary}}
+    {\thesubsubsection}{1em}{}
+
+% Code listing style
+\lstset{
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{codeframe},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    breakatwhitespace=true,
+    columns=flexible,
+    keepspaces=true,
+    showstringspaces=false,
+    xleftmargin=1em,
+    xrightmargin=1em,
+    aboveskip=1em,
+    belowskip=1em
+}
+
+% Header/footer
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[L]{\small\textit{Structured Harnesses for Clinical AI}}
+\fancyhead[R]{\small\thepage}
+
+% Title page info
+\title{
+    \vspace{-2em}
+    {\Huge\bfseries\color{primary} Structured Harnesses for Clinical AI}\\[0.5em]
+    {\Large\color{secondary} A Technical Comparison of Interface Approaches\\for Psychiatric Documentation}
+}
+\author{
+    \textit{Technical Documentation}
+}
+\date{January 2026}
+
+\begin{document}
+
+% Title
+\maketitle
+\thispagestyle{fancy}
+
+% Abstract
+\begin{abstract}
+\noindent This document examines how the wrapper around a language model affects clinical documentation output. We processed the same psychiatric case through ChatGPT and through a purpose-built tool called Psych Intake Brief. Both use GPT-5.2. The model is identical. The difference is in how the interaction gets structured. This document examines what engineering choices matter for clinical documentation workflows.
+\end{abstract}
+
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+\section{The Problem}
+
+Psychiatric intake documentation involves synthesizing multiple source documents: discharge summaries from prior hospitalizations, outpatient progress notes, biopsychosocial assessments, psychological testing reports, and intake screening forms. These documents overlap in content but emphasize different things. A discharge summary focuses on treatment course. A biopsychosocial assessment focuses on developmental and social history. A psychiatric evaluation focuses on diagnostic formulation.
+
+The clinician's job is to pull all of this into something coherent. That means arranging episodes chronologically across documents, avoiding redundant statements when multiple sources cover the same event, attributing claims to source material so they can be verified later, applying consistent notation like DSM-5 specifiers and substance use criteria counts, and flagging gaps where missing information affects the clinical picture.
+
+Done manually, this takes 20--40 minutes per intake depending on complexity.
+
+Language models can do this synthesis. The question is whether the interface you use to access the model changes the output in ways that matter.
+
+\section{The Case: Jane}
+
+Jane is 33. Three months of worsening depression after losing her job. Passive suicidal ideation brought her to the ED. Four-day hospitalization. Started on sertraline 50mg and trazodone 50mg PRN. Discharged to outpatient care. At follow-up, sertraline went up to 100mg. PHQ-9 was 18, which is moderately severe.
+
+Three documents tell the story: a discharge summary from November 6th, a biopsychosocial assessment from October 29th, and a psychiatric evaluation from November 15th. These are included with the application for independent evaluation.
+
+\section{ChatGPT Approach}
+
+We pasted all three documents into ChatGPT with a simple prompt: ``Please summarize this psychiatric intake for documentation.''
+
+The output was organized and accurate. The model created sections for Timeline of Care, Presenting Problem, History of Present Illness, Past Psychiatric History, Substance Use, and Treatment Plan. It got the key details right: PHQ-9 score of 18, medication titration from sertraline 50mg to 100mg, safety plan reviewed at discharge.
+
+ChatGPT can produce citations if you ask. It can use DSM-5 specifiers if you ask. It can flag missing information if you ask. The model has these capabilities. The interface just does not enforce them. Every session starts fresh. You have to remember to specify your requirements each time. Forget to ask for citations, no citations. Forget DSM specifiers, informal diagnostic language. Different prompt, different format.
+
+The variability stems from the interface.
+
+\section{Psych Intake Brief Approach}
+
+This tool uses the same GPT-5.2 model via API. The difference is the wrapper. The wrapper automates operations that would otherwise require manual prompting every time.
+
+\subsection{Document Processing}
+
+\textit{Source: \texttt{src/lib/parser.ts}}
+
+When you upload files, they get processed locally on your machine. The app uses pdfjs-dist for PDFs, mammoth for DOCX files, and native text reading for plain text. No raw files leave your device.
+
+After extracting the text, the system does three things:
+
+\begin{enumerate}[leftmargin=2em]
+    \item \textbf{Type Classification}: Regex patterns look for phrases like ``discharge summary'' or ``psychiatric evaluation'' and tag the document accordingly. Jane's discharge summary gets tagged automatically because it contains ``Date of Discharge: 11/06/2024.''
+    \item \textbf{Date Extraction}: Jane's discharge summary yields 11/06/2024, the biopsychosocial yields 10/29/2024, and the psych eval yields 11/15/2024.
+    \item \textbf{Chunking}: Text splits into labeled segments with unique identifiers for citation tracking.
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{../diagrams/diagram1.png}
+    \caption{Document processing pipeline: local extraction, classification, and chunking}
+    \label{fig:docprocessing}
+\end{figure}
+
+Here is what a chunk from Jane's discharge summary actually looks like:
+
+\begin{lstlisting}
+[discharge-summary_chunk_2]
+Patient was admitted on 11/02/2024 with passive suicidal ideation in the 
+context of worsening depression following job loss. She denied active plan 
+or intent. Started on sertraline 50mg daily and trazodone 50mg PRN for 
+insomnia. By day 3, patient reported improved sleep and denied SI...
+\end{lstlisting}
+
+\subsection{Evidence Ranking}
+
+\textit{Source: \texttt{src/lib/evidence.ts}}
+
+Not all chunks are relevant to every section. When generating the Substance Use section for Jane, the system needs chunks mentioning alcohol or cannabis, not chunks about her hospitalization timeline.
+
+The system tokenizes the section guidance and scores chunks by matching tokens. For Jane's Substance Use section, chunks from the biopsychosocial assessment score highest because that document contains:
+
+\begin{lstlisting}
+[biopsychosocial_chunk_4]
+Substance Use History: Patient reports drinking 1-2 alcoholic beverages on 
+weekends socially. Denies history of blackouts or withdrawal symptoms. 
+Occasional cannabis use, approximately 1-2 times per month...
+\end{lstlisting}
+
+There is also source diversification. If all the top-scoring chunks came from the biopsychosocial, the system would still pull in the best chunk from other documents. In Jane's case, the discharge summary mentions ``UDS negative'' which adds verification context.
+
+\subsection{LLM Orchestration}
+
+\textit{Source: \texttt{src/lib/llm.ts}}
+
+The core architectural decision is making separate API calls for each section of the template. For Jane's case, generating the Substance Use section sends only substance-related chunks to the API, along with section-specific guidance.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.65\textwidth]{../diagrams/diagram2.png}
+    \caption{Per-section API call structure with embedded instructions}
+    \label{fig:orchestration}
+\end{figure}
+
+The model returns structured JSON with both text and citations:
+
+\begin{lstlisting}
+{
+  "text": "Alcohol: onset not documented; 1-2 drinks/weekends; 
+           last use not documented; 0/11 criteria; no AUD.
+           Cannabis: onset not documented; 1-2x/month; 
+           last use not documented; 0/11 criteria; no CUD.",
+  "citations": [
+    {"chunkId": "biopsychosocial_chunk_4", 
+     "excerpt": "1-2 alcoholic beverages on weekends socially"},
+    {"chunkId": "biopsychosocial_chunk_4", 
+     "excerpt": "Occasional cannabis use, approximately 1-2 times/month"}
+  ]
+}
+\end{lstlisting}
+
+The JSON schema forces the model to either cite or omit. It cannot make claims without attempting citations.
+
+\subsection{Template System}
+
+\textit{Source: \texttt{src/lib/template.ts}}
+
+The template defines 17 sections. Each has format guidance that tells the model exactly what to produce.
+
+For Jane's Problem List, the guidance specifies the DSM-5-TR specifier chain format. The output:
+
+\begin{lstlisting}
+Disposition: Outpatient; Safety plan: reviewed 11/06/2024; 
+             Follow-up: psychiatry 2 weeks
+
+1. Major Depressive Disorder, recurrent, moderate, with anxious distress
+2. Insomnia Disorder, episodic
+\end{lstlisting}
+
+Compare this to ChatGPT's output with no guidance: ``Major Depressive Disorder, recurrent, moderate.'' The specifiers come from embedded instructions, not different model capability.
+
+\subsection{DSM Integration}
+
+\textit{Source: \texttt{src/lib/dsm.ts}}
+
+For Jane's DSM-5 Criteria Analysis section, the system injects Major Depressive Disorder criteria as reference material. The model uses this reference to produce structured notation:
+
+\begin{lstlisting}
+MDD (meets criteria)
+A1 depressed mood [+] - "feeling down 3 months"
+A2 anhedonia [+] - "no interest in activities"
+A3 weight [+] - "6-lb weight loss"
+A4 sleep [+] - "insomnia, 4-5 hours/night"
+A5 psychomotor [-]
+A6 fatigue [+] - "low energy"
+A7 worthlessness [?]
+A8 concentration [+] - "poor concentration at work"
+A9 SI [+] - "passive SI, no plan"
+Threshold: 7/9, required 5+ [MET]
+\end{lstlisting}
+
+The [+] markers cite Jane's clinical documents, not the DSM text.
+
+\subsection{Citation System}
+
+The flow connects model output back to source documents:
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{../diagrams/diagram3.png}
+    \caption{Citation flow from source documents through model to user interface}
+    \label{fig:citations}
+\end{figure}
+
+Click a citation number and the evidence panel shows the source excerpt. For Jane's PHQ-9 score of 18, clicking the citation shows: ``PHQ-9: 18/27 indicating moderately severe depression'' from the psychiatric evaluation.
+
+\subsection{Privacy Architecture}
+
+The architecture makes specific choices about data handling:
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{../diagrams/diagram4.png}
+    \caption{Data flow: local parsing with fragmented API requests}
+    \label{fig:privacy}
+\end{figure}
+
+Document text extraction happens locally. Jane's PDF discharge summary never leaves your machine. Only extracted text travels to the API.
+
+Per-section API calls mean no single request contains Jane's complete record:
+
+\begin{lstlisting}
+Request 1 (HPI): discharge-summary_chunk_2, biopsychosocial_chunk_3
+Request 2 (Family Hx): biopsychosocial_chunk_7
+Request 3 (Substance Use): biopsychosocial_chunk_4, discharge-summary_chunk_5
+\end{lstlisting}
+
+No single request contains Jane's full hospitalization narrative, substance history, family history, and treatment plan together. All API calls include \texttt{store: false}, telling OpenAI not to retain Jane's data for training.
+
+HIPAA compliance requires legal analysis of your specific deployment context. These are architectural choices to minimize data aggregation.
+
+\section{Output Comparison}
+
+The output differences for Jane reflect the embedded instructions:
+
+\begin{table}[H]
+\centering
+\caption{Comparison of output characteristics}
+\label{tab:comparison}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Aspect} & \textbf{ChatGPT} & \textbf{Psych Intake Brief} \\
+\midrule
+Data handling & Complete record in one request & Fragmented across N requests \\
+Citations & Available when prompted & Automatic with schema \\
+DSM notation & Available when prompted & Embedded in template \\
+Format consistency & Varies by session & Enforced by schema \\
+Verification & Manual document search & Click-to-excerpt \\
+Gap flagging & Available when prompted & Automatic with rationale \\
+Local processing & None & PDF/DOCX on device \\
+Data retention & Per OpenAI settings & Explicitly disabled \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Diagnostic notation:}
+\begin{itemize}[leftmargin=2em]
+    \item ChatGPT: ``Major Depressive Disorder, recurrent, moderate''
+    \item Psych Intake Brief: ``Major Depressive Disorder, recurrent, moderate, with anxious distress''
+\end{itemize}
+
+\textbf{Substance use:}
+\begin{itemize}[leftmargin=2em]
+    \item ChatGPT: ``1-2 drinks on weekends''
+    \item Psych Intake Brief: ``Alcohol: onset not documented; 1-2 drinks/weekends; last use not documented; 0/11 criteria; no AUD''
+\end{itemize}
+
+\section{Visual Interface}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{../screenshots/tool-wide-overview.png}
+    \caption{Tool overview showing Jane's documents (left), generated summary (center), and evidence panel (right)}
+    \label{fig:overview}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{../screenshots/tool-dsm-badges-wide.png}
+    \caption{DSM-5 Criteria Analysis with color-coded badges: green [+] for criteria met, orange [?] for unknown}
+    \label{fig:dsm}
+\end{figure}
+
+\section{What This Does and Does Not Solve}
+
+The harness addresses \textbf{consistency}. Every intake gets the same format. Jane's summary uses the same notation as the next patient.
+
+It addresses \textbf{verification}. Jane's PHQ-9 score of 18 has a clickable citation. One click shows the source.
+
+It addresses \textbf{completeness}. Seventeen predefined sections ensure Jane's family history gap gets flagged automatically.
+
+It does \textbf{not} address model limitations. If GPT-5.2 misreads Jane's medication dose, the harness does not catch it.
+
+It does \textbf{not} address EHR integration. Jane's summary exports to DOCX or PDF. Getting it into Epic requires additional work.
+
+It does \textbf{not} address regulatory compliance. Whether processing Jane's records this way meets HIPAA depends on your deployment context.
+
+\section{When to Use Which}
+
+ChatGPT works when you are comfortable with prompt engineering, when format requirements vary, for one-off tasks, or when citation verification does not matter.
+
+The structured harness works when consistent format is required across many patients, when verification matters, when multiple clinicians need identical conventions, or when workflow efficiency outweighs flexibility.
+
+The harness provides structure at the cost of flexibility.
+
+Source materials including Jane's documents and all code are available for independent evaluation.
+
+\end{document}
+

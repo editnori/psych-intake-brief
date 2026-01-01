@@ -1,0 +1,22 @@
+flowchart LR
+  subgraph device [Clinician's Device]
+    direction TB
+    D[Jane's Documents]
+    P[Local Parsing]
+    C[12 Chunks]
+    App[Application]
+    D --> P
+    P --> C
+    C --> App
+  end
+  
+  subgraph api [OpenAI API]
+    direction TB
+    S1[HPI: 3 chunks]
+    S2[Family Hx: 1 chunk]
+    S3[Substance: 2 chunks]
+  end
+  
+  App --> S1
+  App --> S2
+  App --> S3

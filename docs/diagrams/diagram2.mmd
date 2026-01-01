@@ -1,0 +1,17 @@
+flowchart TB
+  E[Ranked Evidence]
+  G[Section Guidance]
+  D[DSM Context]
+  P[Prior Sections]
+  I[System Instructions]
+  S[JSON Schema]
+  T[Text Output]
+  C[Citations]
+  
+  E --> I
+  G --> I
+  D --> I
+  P --> I
+  I --> S
+  S --> T
+  S --> C

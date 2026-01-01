@@ -1,0 +1,243 @@
+/* Academic Paper Styling */
+@page {
+    size: letter;
+    margin: 1in;
+    @top-center {
+        content: "Structured Harnesses for Clinical AI";
+        font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+        font-size: 9pt;
+        font-style: italic;
+        color: #666;
+    }
+    @bottom-center {
+        content: counter(page);
+        font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+        font-size: 10pt;
+    }
+}
+
+@page :first {
+    @top-center { content: none; }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    font-size: 11pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    text-align: justify;
+    hyphens: auto;
+}
+
+/* Title styling */
+h1 {
+    font-size: 22pt;
+    font-weight: bold;
+    color: #2c3e50;
+    text-align: center;
+    margin-top: 0;
+    margin-bottom: 0.3em;
+    line-height: 1.2;
+}
+
+.meta {
+    text-align: center;
+    font-size: 10pt;
+    color: #666;
+    margin-top: 0.5em;
+    margin-bottom: 1.5em;
+}
+
+/* Abstract */
+.abstract {
+    background: #f8f9fa;
+    padding: 1em 1.5em;
+    margin: 1.5em 0;
+    border-left: 4px solid #2980b9;
+    font-size: 10pt;
+}
+
+.abstract-title {
+    font-weight: bold;
+    font-variant: small-caps;
+    margin-bottom: 0.5em;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid #ddd;
+    margin: 1.5em 0;
+}
+
+/* Section headings */
+h2 {
+    font-size: 14pt;
+    font-weight: bold;
+    color: #2c3e50;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    padding-bottom: 0.2em;
+    border-bottom: 1px solid #eee;
+}
+
+h3 {
+    font-size: 12pt;
+    font-weight: bold;
+    color: #34495e;
+    margin-top: 1em;
+    margin-bottom: 0.4em;
+}
+
+/* Paragraphs */
+p {
+    margin: 0 0 0.8em 0;
+    orphans: 3;
+    widows: 3;
+}
+
+/* Code blocks */
+pre, code {
+    font-family: "Consolas", "Monaco", "Courier New", monospace;
+    font-size: 9pt;
+}
+
+pre {
+    background: #f5f5f5;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 0.8em 1em;
+    margin: 1em 0;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+code {
+    background: #f0f0f0;
+    padding: 0.1em 0.3em;
+    border-radius: 2px;
+}
+
+pre code {
+    background: none;
+    padding: 0;
+}
+
+/* Lists */
+ul, ol {
+    margin: 0.5em 0 1em 0;
+    padding-left: 1.5em;
+}
+
+li {
+    margin-bottom: 0.3em;
+}
+
+/* Tables */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 10pt;
+}
+
+th, td {
+    border: 1px solid #ddd;
+    padding: 0.6em 0.8em;
+    text-align: left;
+}
+
+th {
+    background: #f5f5f5;
+    font-weight: bold;
+    color: #2c3e50;
+}
+
+tr:nth-child(even) {
+    background: #fafafa;
+}
+
+caption {
+    font-style: italic;
+    margin-bottom: 0.5em;
+    color: #666;
+}
+
+/* Figures */
+figure {
+    margin: 1.5em 0;
+    text-align: center;
+    page-break-inside: avoid;
+}
+
+figure img {
+    max-width: 100%;
+    height: auto;
+}
+
+figcaption {
+    font-size: 10pt;
+    font-style: italic;
+    color: #666;
+    margin-top: 0.5em;
+}
+
+/* Blockquotes */
+blockquote {
+    margin: 1em 0;
+    padding: 0.5em 1em;
+    border-left: 3px solid #2980b9;
+    background: #f8f9fa;
+    font-style: italic;
+}
+
+/* Source file references */
+.source {
+    font-size: 9pt;
+    color: #666;
+    font-style: italic;
+    margin-bottom: 0.5em;
+}
+
+/* Emphasis */
+strong {
+    font-weight: bold;
+}
+
+em {
+    font-style: italic;
+}
+
+/* Links */
+a {
+    color: #2980b9;
+    text-decoration: none;
+}
+
+/* Page breaks */
+h2 {
+    page-break-after: avoid;
+}
+
+figure, table, pre {
+    page-break-inside: avoid;
+}
+
+/* Print-specific */
+@media print {
+    body {
+        font-size: 11pt;
+    }
+    
+    a[href]:after {
+        content: none;
+    }
+}
+
