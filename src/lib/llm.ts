@@ -278,6 +278,8 @@ interface StreamResult {
   usage?: {
     input_tokens?: number
     output_tokens?: number
+    total_tokens?: number
+    cached_input_tokens?: number
   }
 }
 
@@ -292,6 +294,7 @@ async function streamResponse(
   let sseBuffer = ''
   let fullContent = ''
   let finished = false
+  let usage: StreamResult['usage']
 
   try {
     while (true) {
@@ -324,11 +327,26 @@ async function streamResponse(
               fullContent = event.text
             }
             finished = true
-          } else if (event?.type === 'response.done') {
+          } else if (event?.type === 'response.done' || event?.type === 'response.completed') {
+            // Handle both response.done and response.completed event types
             finished = true
+            
             // Extract final content from the response object if available
             if (event.response?.output_text) {
               fullContent = event.response.output_text
+            }
+            // Check multiple locations for usage data
+            const usageSource = event.response?.usage || event.usage
+            if (usageSource) {
+              const normalized = normalizeUsage(usageSource)
+              if (normalized) {
+                usage = {
+                  input_tokens: normalized.inputTokens,
+                  output_tokens: normalized.outputTokens,
+                  total_tokens: normalized.totalTokens,
+                  cached_input_tokens: normalized.cachedInputTokens
+                }
+              }
             }
           }
         } catch {
@@ -340,7 +358,7 @@ async function streamResponse(
     reader.releaseLock()
   }
 
-  return { content: fullContent, finished }
+  return { content: fullContent, finished, usage }
 }
 
 // Sections that should include DSM criteria context
@@ -356,7 +374,11 @@ const DEFAULT_MODEL = 'gpt-5.2'
 export interface UsageData {
   promptTokens: number
   completionTokens: number
+  cachedPromptTokens?: number
+  totalTokens?: number
   model: string
+  label?: string
+  tier?: AppSettings['serviceTier']
 }
 
 type UsageCallback = (usage: UsageData) => void
@@ -371,6 +393,41 @@ function emitUsage(usage: UsageData) {
   usageCallbacks.forEach(cb => cb(usage))
 }
 
+interface NormalizedUsage {
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  cachedInputTokens: number
+}
+
+function normalizeUsage(raw: any): NormalizedUsage | null {
+  if (!raw) return null
+  const inputTokens = raw.input_tokens ?? raw.prompt_tokens ?? 0
+  const outputTokens = raw.output_tokens ?? raw.completion_tokens ?? 0
+  const totalTokens = raw.total_tokens ?? (inputTokens + outputTokens)
+  const cachedInputTokens = raw.input_token_details?.cached_tokens ?? raw.cached_tokens ?? 0
+  return { inputTokens, outputTokens, totalTokens, cachedInputTokens }
+}
+
+export function emitUsageFromResponse(
+  usage: any,
+  settings: AppSettings,
+  label?: string,
+  modelOverride?: string
+): void {
+  const normalized = normalizeUsage(usage)
+  if (!normalized) return
+  emitUsage({
+    promptTokens: normalized.inputTokens,
+    completionTokens: normalized.outputTokens,
+    cachedPromptTokens: normalized.cachedInputTokens,
+    totalTokens: normalized.totalTokens,
+    model: modelOverride || DEFAULT_MODEL,
+    label,
+    tier: settings.serviceTier
+  })
+}
+
 interface OpenAIRequestOptions {
   instructions: string
   input: string
@@ -378,6 +435,7 @@ interface OpenAIRequestOptions {
   jsonSchema?: object
   stream?: boolean
   onDelta?: (text: string) => void
+  label?: string
 }
 
 /**
@@ -447,12 +505,16 @@ async function callOpenAI(
       }
     })
     
-    // Try to extract usage from streamed response
+    // Extract and emit usage from streamed response
     if (streamResult.usage) {
       emitUsage({
         promptTokens: streamResult.usage.input_tokens || 0,
         completionTokens: streamResult.usage.output_tokens || 0,
-        model: DEFAULT_MODEL
+        cachedPromptTokens: streamResult.usage.cached_input_tokens || 0,
+        totalTokens: streamResult.usage.total_tokens || undefined,
+        model: DEFAULT_MODEL,
+        label: options.label,
+        tier: settings.serviceTier
       })
     }
     
@@ -460,13 +522,10 @@ async function callOpenAI(
   } else {
     const data = await response.json()
     
-    // Extract and emit usage data
-    if (data.usage) {
-      emitUsage({
-        promptTokens: data.usage.input_tokens || data.usage.prompt_tokens || 0,
-        completionTokens: data.usage.output_tokens || data.usage.completion_tokens || 0,
-        model: DEFAULT_MODEL
-      })
+    // Extract and emit usage data - check both top-level and nested locations
+    const usageData = data.usage || data.response?.usage
+    if (usageData) {
+      emitUsageFromResponse(usageData, settings, options.label, DEFAULT_MODEL)
     }
     
     return extractOutputText(data)
@@ -499,10 +558,11 @@ Rules for open questions:
 - If documentation says "denies" or "unknown," that's an answer—don't re-ask
 - Each question must specify how the answer would change assessment or plan` : ''
 
-  const instructions = `Psychiatrist preparing colleague for interview. Output JSON: text, citations.
+  const instructions = `Clinician-to-clinician handoff. Output JSON: text, citations.
 
-Style: Active voice. Short sentences. No hedging or meta-commentary.
+Style: Clear, structured, concise. Active voice. Short sentences. No hedging or meta-commentary.
 Format: Labeled lines (Label: content). Dates as MM/YYYY. Meds as Drug dose frequency.
+Redundancy: Remove repetition. Do not restate other sections. Keep only section-specific essentials.
 
 DSM-5: [+] met, [-] not met, [?] unknown, [p] partial. Specifier chain: Disorder, severity, course, features. SUD: mild 2-3, moderate 4-5, severe 6+.
 
@@ -548,7 +608,8 @@ Anti-redundancy: Never repeat content from other sections. Each section stands a
     maxTokens: 2000,
     jsonSchema,
     stream: Boolean(onDelta),
-    onDelta
+    onDelta,
+    label: `section:${section.id}`
   })
 
   const parsed = coerceModelPayload(content)
@@ -566,7 +627,7 @@ export async function askWithOpenAI(
 
   const instructions = `Chart Q&A. Output JSON: text, citations.
 
-Answer from evidence only. No chunk IDs in text. Direct language. Use "-" for bullets.
+Answer from evidence only. No chunk IDs in text. Direct, concise language. Use "-" for bullets.
 If insufficient: state so, list 2-4 follow-ups.`
   const user = `Question: ${question}\n\nEvidence:\n${evidenceText}\n\nReturn JSON with keys: text, citations.`
 
@@ -600,7 +661,8 @@ If insufficient: state so, list 2-4 follow-ups.`
     instructions,
     input: user,
     maxTokens: 400,
-    jsonSchema
+    jsonSchema,
+    label: 'ask'
   })
 
   const parsed = coerceModelPayload(content)
@@ -625,7 +687,7 @@ export async function editWithOpenAI(
 
   const instructions = `Clinical editor. Output JSON: text, citations.
 
-${scopeLine} Preserve structure unless change requested. Use evidence only. No chunk IDs in text. If insufficient evidence, return original.`
+${scopeLine} Preserve structure unless change requested. Remove redundancy and tighten phrasing. Use evidence only. No chunk IDs in text. If insufficient evidence, return original.`
 
   const user = [
     `Edit request: ${request}`,
@@ -665,7 +727,8 @@ ${scopeLine} Preserve structure unless change requested. Use evidence only. No c
     instructions,
     input: user,
     maxTokens: 400,
-    jsonSchema
+    jsonSchema,
+    label: `edit:${options?.scope || 'section'}`
   })
 
   const parsed = coerceModelPayload(content)
@@ -691,7 +754,8 @@ Match statements to evidence chunks. Return chunkId for each supported claim. Ex
   const content = await callOpenAI(settings, {
     instructions,
     input: user,
-    maxTokens: 300
+    maxTokens: 300,
+    label: 'citations-recover'
   })
 
   const parsed = coerceModelPayload(content)
@@ -722,7 +786,8 @@ Issue: 1-sentence rationale. Empty array if nothing to fix.`
   const content = await callOpenAI(reviewSettings, {
     instructions,
     input: `Sections:\n${summary}\n\nReturn JSON now.`,
-    maxTokens: 600
+    maxTokens: 600,
+    label: 'review-summary'
   })
 
   const parsed = safeJsonParse<any>(content) || {}
@@ -779,7 +844,8 @@ Empty array if documentation meets attending standards.`
   const content = await callOpenAI(reviewSettings, {
     instructions,
     input: `Intake Summary:\n${summary}\n\nReturn JSON now.`,
-    maxTokens: 800
+    maxTokens: 800,
+    label: 'attending-review'
   })
 
   const parsed = safeJsonParse<any>(content) || {}
@@ -824,7 +890,8 @@ Output: Valid JSON with key: answers (array of {id, text, citations})`
   const content = await callOpenAI(settings, {
     instructions,
     input: user,
-    maxTokens: 800
+    maxTokens: 800,
+    label: 'open-questions'
   })
 
   const parsed = safeJsonParse<any>(content) || {}

@@ -1,5 +1,6 @@
 import type { AppSettings } from './types'
 import { extractOutputText, safeJsonParse } from './openaiHelpers'
+import { emitUsageFromResponse } from './llm'
 
 export interface PdfParseResult {
   text: string
@@ -98,6 +99,8 @@ export async function readPdfWithOpenAI(file: File, settings: AppSettings): Prom
   }
 
   const data = await response.json()
+  const usageData = data?.usage || data?.response?.usage
+  emitUsageFromResponse(usageData, settings, 'pdf-parse', model)
   const content = extractOutputText(data)
   const parsed = safeJsonParse<{ text: string; truncated?: boolean }>(content)
 
