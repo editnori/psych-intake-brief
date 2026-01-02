@@ -1,20 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FileText, Sparkles, RefreshCw, FileDown, Loader2, Plus, FolderOpen, Settings, Upload, ChevronRight, Quote, ArrowUp, MoreHorizontal, X, File, MessageSquare, Layers, BookOpen, Clock, ChevronUp, ChevronDown, Eye, EyeOff, Pencil, Lock, ClipboardCheck } from 'lucide-react'
+import { FileText, Sparkles, RefreshCw, FileDown, Loader2, Plus, FolderOpen, Settings, Upload, ChevronRight, Quote, ArrowUp, MoreHorizontal, X, File, MessageSquare, Layers, BookOpen, Clock, ChevronUp, ChevronDown, Eye, EyeOff, Pencil, Lock, ClipboardCheck, AlertTriangle, BarChart3, Tag } from 'lucide-react'
 import { TEMPLATE_SECTIONS } from './lib/template'
 import type { AppSettings, SourceDoc, TemplateSection, PatientProfile, ChatMessage, ChatThreads, Chunk, OpenQuestion, Citation } from './lib/types'
 import { loadFiles, mergeDocuments, makeDocFromText } from './lib/parser'
 import { normalizeText, normalizeMarkdown, stripInlineChunkIds, formatProfile, normalizeLabelBold, normalizeListBlocks, cleanDisplayText } from './lib/textUtils'
-import { rankEvidenceDiverse } from './lib/evidence'
+import { rankEvidenceDiverse, rankEvidenceWeighted } from './lib/evidence'
+import { rankEvidenceSemantic, isSemanticReady } from './lib/embeddings'
 import { generateSectionWithOpenAI, askWithOpenAI, editWithOpenAI, reviewSummaryWithOpenAI, answerOpenQuestionsWithOpenAI, recoverCitationsWithOpenAI, extractCitationsFromText, onTokenUsage, reviewForAttending, AttendingReviewIssue } from './lib/llm'
 import { calculateCost } from './lib/types'
 import { buildDsmIndex, rankDsmEntries, formatDsmEntries, buildDsmQuery } from './lib/dsm'
 import { loadSettings, saveSettings } from './lib/storage'
 import { loadCase, saveCase, deleteCase, listCases } from './lib/caseStore'
+import { createEmptyThreads } from './lib/chatStore'
 import { exportDocx, exportPdf } from './lib/exporters'
 import { SettingsModal } from './components/SettingsModal'
 import { FilePreviewModal } from './components/FilePreviewModal'
 import { Markdown } from './components/Markdown'
 import { DiffView } from './components/DiffView'
+import { UsagePanel } from './components/UsagePanel'
+import { IssuesPanel } from './components/IssuesPanel'
 
 const MAX_OPEN_QUESTIONS_PER_SECTION = 1
 const DEMOGRAPHIC_QUESTION_PATTERNS = [
@@ -48,13 +52,14 @@ export function App() {
   const [isDragging, setIsDragging] = useState(false)
   const [isGeneratingAll, setIsGeneratingAll] = useState(false)
   const [profile, setProfile] = useState<PatientProfile>({ name: '', mrn: '', dob: '' })
-  const [chatThreads, setChatThreads] = useState<ChatThreads>({ ask: [], edit: [] })
+  const [chatThreads, setChatThreads] = useState<ChatThreads>(() => createEmptyThreads())
   const [chatMode, setChatMode] = useState<'auto' | 'ask' | 'edit'>('auto')
-  const [activePanel, setActivePanel] = useState<'evidence' | 'chat' | 'template' | 'followup'>('chat')
+  const [activePanel, setActivePanel] = useState<'evidence' | 'chat' | 'template' | 'followup' | 'usage' | 'issues'>('chat')
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [includeChatInExport, setIncludeChatInExport] = useState(true)
+  const [includeClinicianOnly, setIncludeClinicianOnly] = useState(false)
   const [caseId, setCaseId] = useState<string | null>(null)
   const [cases, setCases] = useState<Array<{ id: string; savedAt: number; profile: PatientProfile }>>([])
   const [actionsOpen, setActionsOpen] = useState(false)
@@ -64,8 +69,10 @@ export function App() {
   const [evidenceContext, setEvidenceContext] = useState<{ sourceName: string; excerpt: string } | null>(null)
   const [previewDoc, setPreviewDoc] = useState<SourceDoc | null>(null)
   const documentRef = useRef<HTMLDivElement>(null)
+  const sectionsRef = useRef<TemplateSection[]>(sections)
   const dsmIndexRef = useRef<ReturnType<typeof buildDsmIndex> | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const lastFollowupLabelRef = useRef('')
   const [chatLoading, setChatLoading] = useState(false)
   const [expandedCitations, setExpandedCitations] = useState<Record<string, boolean>>({})
@@ -85,9 +92,24 @@ export function App() {
     text: '',
     source: ''
   }))
+  const [postInterviewBusy, setPostInterviewBusy] = useState(false)
   const [draggingSectionId, setDraggingSectionId] = useState<string | null>(null)
   const [dragOverSectionId, setDragOverSectionId] = useState<string | null>(null)
-  const [tokenUsage, setTokenUsage] = useState({ prompt: 0, completion: 0, cost: 0 })
+  const [tokenUsage, setTokenUsage] = useState({ input: 0, cached: 0, output: 0, cost: 0 })
+  const [usageEvents, setUsageEvents] = useState<Array<{
+    id: string
+    label: string
+    rawLabel?: string
+    input: number
+    cached: number
+    output: number
+    total: number
+    model: string
+    tier: AppSettings['serviceTier']
+    cost: number
+    createdAt: number
+  }>>([])
+  const [editScope, setEditScope] = useState<'section' | 'selection'>('section')
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null)
   const [attendingReviewIssues, setAttendingReviewIssues] = useState<AttendingReviewIssue[]>([])
   const hasAttendingIssues = attendingReviewIssues.length > 0
@@ -103,12 +125,35 @@ export function App() {
   // Track token usage from API calls
   useEffect(() => {
     const unsubscribe = onTokenUsage((usage) => {
-      setTokenUsage(prev => {
-        const newPrompt = prev.prompt + usage.promptTokens
-        const newCompletion = prev.completion + usage.completionTokens
-        const newCost = calculateCost({ prompt: newPrompt, completion: newCompletion }, usage.model)
-        return { prompt: newPrompt, completion: newCompletion, cost: newCost }
-      })
+      const input = usage.promptTokens || 0
+      const cached = usage.cachedPromptTokens || 0
+      const output = usage.completionTokens || 0
+      const total = usage.totalTokens || input + output
+      const tier = usage.tier || 'standard'
+      const eventCost = calculateCost({ input, cachedInput: cached, output }, usage.model, tier)
+      const label = formatUsageLabel(usage.label)
+      setTokenUsage(prev => ({
+        input: prev.input + input,
+        cached: prev.cached + cached,
+        output: prev.output + output,
+        cost: prev.cost + eventCost
+      }))
+      setUsageEvents(prev => [
+        {
+          id: crypto.randomUUID(),
+          label,
+          rawLabel: usage.label,
+          input,
+          cached,
+          output,
+          total,
+          model: usage.model,
+          tier,
+          cost: eventCost,
+          createdAt: Date.now()
+        },
+        ...prev
+      ].slice(0, 75))
     })
     return unsubscribe
   }, [])
@@ -122,10 +167,23 @@ export function App() {
   }, [selectedId])
 
   useEffect(() => {
+    sectionsRef.current = sections
+  }, [sections])
+
+  useEffect(() => {
+    if (selectionSnippet) {
+      setEditScope('section')
+    }
+  }, [selectionSnippet?.text, selectionSnippet?.sectionId])
+
+  useEffect(() => {
     const el = chatInputRef.current
     if (!el) return
+    const maxHeight = 360
     el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+    const nextHeight = Math.min(el.scrollHeight, maxHeight)
+    el.style.height = `${nextHeight}px`
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden'
   }, [chatInput])
 
   useEffect(() => {
@@ -209,7 +267,7 @@ export function App() {
   const pendingFollowupEdits = useMemo(
     () => chatThreads.edit.filter(msg =>
       msg.editStatus === 'pending'
-      && (msg.editApplyMode === 'append-note' || msg.editApplyMode === 'open-question-answer')
+      && (msg.editApplyMode === 'append-note' || msg.editApplyMode === 'open-question-answer' || msg.editApplyMode === 'update-card')
     ),
     [chatThreads.edit]
   )
@@ -243,6 +301,15 @@ export function App() {
     })
   }, [followupSourceLabel, postInterviewManualSource])
   const profileLine = useMemo(() => formatProfile(profile), [profile])
+  const sectionDisplayMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const section of sections) {
+      const streamingPreview = streamingPreviews[section.id]
+      const rawText = typeof streamingPreview === 'string' ? streamingPreview : (section.output || '')
+      map.set(section.id, formatSectionDisplayText(rawText, section.id))
+    }
+    return map
+  }, [sections, streamingPreviews])
 
   const allChatMessages = useMemo(() => {
     const merged = [...chatThreads.ask, ...chatThreads.edit]
@@ -360,7 +427,7 @@ export function App() {
     if (!parsed || parsed.items.length === 0) return text
     const base = stripOpenQuestionsBlock(text)
     const block = formatOpenQuestionsBlock(parsed.items)
-    const postInterviewMatch = base.match(/(?:^|\n)\s*(?:\*\*)?\s*post[- ]interview notes?:?(?:\s*\([^)]*\))?(?:\*\*)?/i)
+    const postInterviewMatch = base.match(/(?:^|\n)\s*(?:\*\*)?\s*(?:post[- ]interview notes?|updates?)(?:\s*\([^)]*\))?:?(?:\*\*)?/i)
     if (!postInterviewMatch || postInterviewMatch.index == null) {
       return [base.trim(), block].filter(Boolean).join('\n\n')
     }
@@ -436,7 +503,7 @@ export function App() {
     if (sourceNote) {
       body.push(`- Source: ${sourceNote}`)
     }
-    return [`**Post-interview note (${safeDate}):**`, ...body].join('\n')
+    return [`**Update (${safeDate}):**`, ...body].join('\n')
   }
 
   function applyOpenQuestionAnswerToText(text: string, questionText: string, answerText: string): string {
@@ -548,6 +615,80 @@ export function App() {
     return [before, normalized, rest.trim()].filter(Boolean).join('\n\n')
   }
 
+  function dedupeLines(text: string): string {
+    const lines = text.split('\n')
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) {
+        result.push(line)
+        continue
+      }
+      const key = trimmed.toLowerCase()
+      if (trimmed.length > 12 && seen.has(key)) {
+        continue
+      }
+      seen.add(key)
+      result.push(line)
+    }
+    return result.join('\n')
+  }
+
+  function normalizeForCompare(text: string): string {
+    return normalizeText(stripInlineChunkIds(text || '')).toLowerCase().replace(/[^a-z0-9]+/g, '').trim()
+  }
+
+  function isSubstantiveRevision(current: string, next: string): boolean {
+    const currentClean = normalizeText(stripInlineChunkIds(current || '')).trim()
+    const nextClean = normalizeText(stripInlineChunkIds(next || '')).trim()
+    if (!nextClean) return false
+    if (!currentClean) return true
+    if (normalizeForCompare(currentClean) === normalizeForCompare(nextClean)) return false
+    const diffRatio = Math.abs(nextClean.length - currentClean.length) / Math.max(1, currentClean.length)
+    if (diffRatio < 0.04 && currentClean.includes(nextClean)) return false
+    return true
+  }
+
+  function inferUpdateTag(text: string): string {
+    const lower = text.toLowerCase()
+    if (/suicid|hi\b|homicid|safety|protective|risk/.test(lower)) return 'Safety update'
+    if (/med|medication|dose|mg|titrate|increase|decrease|sertraline|fluoxetine|trazodone/.test(lower)) return 'Medication update'
+    if (/diagnos|dsm|criteria|meets|rule[- ]out/.test(lower)) return 'Dx clarification'
+    if (/substance|alcohol|cannabis|opioid|stimulant|nicotine/.test(lower)) return 'Substance update'
+    if (/labs?|ts h|tsh|uds|cbc|bmp|vit|a1c/.test(lower)) return 'Labs update'
+    if (/social|housing|support|employment|legal|family/.test(lower)) return 'Social update'
+    return 'New information'
+  }
+
+  function extractUpdateSummary(text: string): string {
+    const cleaned = normalizeText(stripInlineChunkIds(text || '')).trim()
+    if (!cleaned) return ''
+    const firstLine = cleaned.split('\n').find(line => line.trim()) || ''
+    return firstLine.length > 160 ? `${firstLine.slice(0, 160)}…` : firstLine
+  }
+
+  function formatUsageLabel(raw?: string): string {
+    if (!raw) return 'Model call'
+    if (raw.startsWith('section:')) {
+      const id = raw.split(':')[1] || ''
+      const current = sectionsRef.current.find(s => s.id === id)?.title
+      const fallback = TEMPLATE_SECTIONS.find(s => s.id === id)?.title
+      return `Generate · ${current || fallback || id}`
+    }
+    if (raw.startsWith('edit:')) {
+      const scope = raw.split(':')[1] || 'section'
+      return `Edit · ${scope === 'selection' ? 'Selection' : 'Section'}`
+    }
+    if (raw === 'ask') return 'Ask (Q&A)'
+    if (raw === 'citations-recover') return 'Recover citations'
+    if (raw === 'review-summary') return 'Review summary'
+    if (raw === 'attending-review') return 'Attending review'
+    if (raw === 'open-questions') return 'Answer open questions'
+    if (raw === 'pdf-parse') return 'PDF parse'
+    return raw.replace(/[-_]/g, ' ')
+  }
+
   function getSectionTitle(sectionId: string): string | null {
     const current = sections.find(s => s.id === sectionId)?.title
     if (current) return current
@@ -590,6 +731,7 @@ export function App() {
     out = sanitizeOpenQuestionsBlock(out, sectionId)
     out = moveOpenQuestionsToEnd(out)
     out = normalizeListBlocks(out)
+    out = dedupeLines(out)
     if (options?.stripChunkIds !== false) {
       out = stripInlineChunkIds(out)
     }
@@ -685,7 +827,11 @@ export function App() {
           ...base,
           ...entry,
           output,
-          citations: entry.citations || base.citations
+          citations: entry.citations || base.citations,
+          // Preserve new fields from saved data, fall back to template defaults
+          audience: entry.audience ?? base.audience,
+          exportable: entry.exportable ?? base.exportable,
+          parentSection: entry.parentSection ?? base.parentSection
         })
         used.add(entry.id)
       }
@@ -699,6 +845,36 @@ export function App() {
       }
     }
     return merged
+  }
+
+  /**
+   * Get sections grouped by parent for hierarchical display.
+   * Returns sections with their child sections attached.
+   */
+  function getSectionsWithChildren(): Array<TemplateSection & { children?: TemplateSection[] }> {
+    const childMap = new Map<string, TemplateSection[]>()
+    const result: Array<TemplateSection & { children?: TemplateSection[] }> = []
+    
+    // Group children by parentSection
+    for (const section of sections) {
+      if (section.parentSection) {
+        const existing = childMap.get(section.parentSection) || []
+        existing.push(section)
+        childMap.set(section.parentSection, existing)
+      }
+    }
+    
+    // Build result with children attached
+    for (const section of sections) {
+      if (!section.parentSection) {
+        result.push({
+          ...section,
+          children: childMap.get(section.id)
+        })
+      }
+    }
+    
+    return result
   }
 
   function escapeRegex(input: string): string {
@@ -808,6 +984,52 @@ export function App() {
     return `${cleaned.slice(0, limit)}\n…`
   }
 
+  function insertEditorText(prefix: string, suffix: string = '', fallback: string = '') {
+    const el = editTextareaRef.current
+    if (!el) return
+    const start = el.selectionStart ?? 0
+    const end = el.selectionEnd ?? 0
+    const selected = el.value.slice(start, end)
+    const insert = selected ? `${prefix}${selected}${suffix}` : `${prefix}${fallback}${suffix}`
+    el.value = el.value.slice(0, start) + insert + el.value.slice(end)
+    const cursor = start + insert.length
+    el.setSelectionRange(cursor, cursor)
+    el.focus()
+  }
+
+  function normalizeEpisodeDate(value?: string): string | undefined {
+    if (!value) return undefined
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+    const match = value.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/)
+    if (!match) return value
+    const month = Math.max(1, Math.min(12, parseInt(match[1], 10)))
+    const day = Math.max(1, Math.min(31, parseInt(match[2], 10)))
+    let year = parseInt(match[3], 10)
+    if (year < 100) year += year >= 70 ? 1900 : 2000
+    return `${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`
+  }
+
+  function updateDocMeta(docId: string, updates: Partial<Pick<SourceDoc, 'documentType' | 'episodeDate'>>) {
+    setDocs(prev => prev.map(doc => {
+      if (doc.id !== docId) return doc
+      const nextDate = normalizeEpisodeDate(updates.episodeDate || doc.episodeDate)
+      const nextType = updates.documentType || doc.documentType
+      const chronologicalOrder = nextDate ? Date.parse(nextDate) : doc.chronologicalOrder
+      const nextChunks = doc.chunks.map(chunk => ({
+        ...chunk,
+        documentType: nextType,
+        episodeDate: nextDate
+      }))
+      return {
+        ...doc,
+        documentType: nextType,
+        episodeDate: nextDate,
+        chronologicalOrder,
+        chunks: nextChunks
+      }
+    }))
+  }
+
   function buildDraftContext(scope: 'section' | 'all', limit: number = 3000): string {
     if (scope === 'section' && selectedSection) {
       const body = stripInlineChunkIds(normalizeText(selectedSection.output || '')).trim()
@@ -837,6 +1059,21 @@ export function App() {
     if (parts.length === 0) return ''
     const joined = parts.join('\n\n')
     return joined.length > limit ? joined.slice(0, limit) + '\n…' : joined
+  }
+
+  function buildChronologyContext(docsList: SourceDoc[], limit: number = 1200): string {
+    const ordered = [...docsList]
+      .filter(d => d.episodeDate || d.chronologicalOrder)
+      .sort((a, b) => (a.chronologicalOrder ?? 0) - (b.chronologicalOrder ?? 0))
+    if (ordered.length === 0) return ''
+    const lines = ordered.map(d => {
+      const date = d.episodeDate || 'undated'
+      const type = d.documentType ? d.documentType.replace('-', ' ') : 'document'
+      return `${date} · ${type} · ${d.name}`
+    })
+    const body = lines.join('\n')
+    const out = `Chronology reference (do not cite):\n${body}`
+    return out.length > limit ? out.slice(0, limit) + '\n…' : out
   }
 
   function buildOpenQuestionsContext(excludeId: string, limit: number = 800): string {
@@ -1141,18 +1378,28 @@ export function App() {
     const openQuestionGuidance = allowOpenQuestions
       ? OPEN_QUESTION_RULES
       : 'Do not include open questions in this section.'
-    const promptGuidance = `${section.guidance}\n${openQuestionGuidance}${updateHint}`
+    const toneGuidance = 'Tone: clinician-to-clinician handoff. Clear, concise, structured. Remove redundancy. No new diagnoses. Explicitly mark uncertainty.'
+    const promptGuidance = `${section.guidance}\n${toneGuidance}\n${openQuestionGuidance}${updateHint}`
     const sectionPrompt = section.id === 'dsm5_analysis'
       ? { ...section, guidance: `${promptGuidance} Use DSM criteria only as reference; do not present DSM criteria as patient facts. Cite patient evidence for symptom claims.` }
       : { ...section, guidance: promptGuidance }
     const evidenceLimit = Math.max(6, sourceCount || 0)
     const buildEvidence = async (limit: number): Promise<Chunk[]> => {
-      let selected = rankEvidenceDiverse(
-        `${sectionPrompt.title} ${sectionPrompt.guidance}`,
-        allChunks,
-        limit,
-        { includeUnmatchedSources: true }
-      )
+      const baseQuery = `${sectionPrompt.title} ${sectionPrompt.guidance}`
+      let selected = section.id === 'hpi'
+        ? rankEvidenceWeighted(baseQuery, allChunks, docs, limit, { includeUnmatchedSources: true })
+        : rankEvidenceDiverse(baseQuery, allChunks, limit, { includeUnmatchedSources: true })
+
+      if (settings.semanticSearch) {
+        try {
+          const semantic = await rankEvidenceSemantic(baseQuery, allChunks, limit)
+          if (semantic && semantic.length > 0) {
+            selected = semantic
+          }
+        } catch {
+          // Fall back to lexical ranking
+        }
+      }
       selected = prioritizeFollowupEvidence(prioritizeSourceCoverage(selected))
       if (section.id === 'dsm5_analysis') {
         const dsmIndex = await ensureDsmIndex()
@@ -1184,7 +1431,8 @@ export function App() {
     const dsmContext = await buildDsmContext()
     const otherSectionsContext = buildOtherSectionsContext(section.id)
     const openQuestionsContext = settings.showOpenQuestions ? buildOpenQuestionsContext(section.id) : ''
-    const combinedContext = [otherSectionsContext, openQuestionsContext].filter(Boolean).join('\n\n')
+    const chronologyContext = section.id === 'hpi' ? buildChronologyContext(docs) : ''
+    const combinedContext = [otherSectionsContext, openQuestionsContext, chronologyContext].filter(Boolean).join('\n\n')
 
     type GeneratedPayload = Awaited<ReturnType<typeof generateSectionWithOpenAI>>
     const finalizeGenerated = async (
@@ -1332,6 +1580,62 @@ export function App() {
     }
   }
 
+  async function polishSection(section: TemplateSection) {
+    if (!settings.openaiApiKey) return
+    const current = sections.find(s => s.id === section.id)
+    const priorOutput = current?.output || ''
+    if (!priorOutput.trim()) return
+    const request = 'Polish for clarity and brevity. Remove redundancy and tighten phrasing. Preserve facts and structure. Do NOT add new information.'
+    const evidence = rankEvidenceWeighted(
+      `${section.title} ${section.guidance}`,
+      allChunks,
+      docs,
+      Math.max(6, sourceCount || 0),
+      { includeUnmatchedSources: true }
+    )
+    setGeneratingIds(prev => ({ ...prev, [section.id]: true }))
+    try {
+      const generated = await editWithOpenAI(request, priorOutput, '', evidence, settings, { scope: 'section' })
+      const cleaned = formatSectionText(generated.text, section.id, { stripChunkIds: false })
+      const finalText = stripInlineChunkIds(cleaned)
+      if (!finalText.trim()) return
+      let citations = generated.citations || []
+      if (citations.length === 0) {
+        const extracted = extractCitationsFromText(cleaned, evidence)
+        if (extracted.length > 0) {
+          citations = extracted
+        } else {
+          try {
+            const recovered = await recoverCitationsWithOpenAI(cleaned, evidence, settings)
+            citations = recovered
+          } catch {
+            citations = []
+          }
+        }
+      }
+      rejectExistingPendingEdits(section.id)
+      appendMessage('edit', {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        text: finalText,
+        citations,
+        createdAt: Date.now(),
+        editStatus: 'pending',
+        editTargetText: trimForDiff(priorOutput),
+        editTargetScope: 'section',
+        editSectionId: section.id,
+        editSectionTitle: section.title,
+        editApplyMode: 'replace'
+      })
+    } finally {
+      setGeneratingIds(prev => {
+        const next = { ...prev }
+        delete next[section.id]
+        return next
+      })
+    }
+  }
+
   async function generateAll() {
     if (!settings.openaiApiKey) {
       return
@@ -1424,7 +1728,7 @@ export function App() {
 
   function buildManualFollowupCitations(sourceNote: string): Citation[] {
     if (followupDocs.length === 0) return []
-    const excerpt = sourceNote || 'Post-interview documentation'
+    const excerpt = sourceNote || 'Update documentation'
     return followupDocs.map(doc => ({
       sourceId: doc.id,
       sourceName: doc.name,
@@ -1440,15 +1744,15 @@ export function App() {
       appendMessage('ask', {
         id: crypto.randomUUID(),
         role: 'assistant',
-        text: 'Upload post-interview notes before generating update cards.',
+        text: 'Upload update notes before generating update cards.',
         createdAt: Date.now()
       })
       return
     }
 
     const today = postInterviewDraft.date || new Date().toISOString().slice(0, 10)
-    const sourceNote = label ? `Post-interview docs: ${label}` : 'Post-interview docs'
-    const sourceNoteLabel = label || 'Post-interview docs'
+    const sourceNote = label ? `Update docs: ${label}` : 'Update docs'
+    const sourceNoteLabel = label || 'Update docs'
     const updateNote = `${sourceNote}. Only include truly new information from these docs.`
     setActivePanel('followup')
     setIsGeneratingAll(true)
@@ -1459,7 +1763,7 @@ export function App() {
         const pending = (openQuestions.length > 0 ? openQuestions : derived).filter(q => q.status === 'open')
         if (pending.length > 0) {
           const query = pending.map(q => q.text).join(' ')
-          let evidence = rankEvidenceDiverse(query, followupChunks, Math.max(6, followupDocs.length * 2), { includeUnmatchedSources: true })
+          let evidence = rankEvidenceWeighted(query, followupChunks, followupDocs, Math.max(6, followupDocs.length * 2), { includeUnmatchedSources: true })
           evidence = prioritizeSourceCoverage(evidence)
           try {
             const answers = await answerOpenQuestionsWithOpenAI(
@@ -1527,7 +1831,7 @@ export function App() {
         }
       }
 
-      // 2) Suggest post-interview addenda for all sections (follow-up notes only)
+      // 2) Suggest post-interview revisions for all sections (follow-up notes only)
       const concurrency = Math.min(3, Math.max(1, visibleSections.length))
       let idx = 0
       const runners = Array.from({ length: Math.min(concurrency, visibleSections.length) }, async () => {
@@ -1535,23 +1839,33 @@ export function App() {
           const current = visibleSections[idx]
           idx += 1
           const priorOutput = (current.output || '').trim()
-          const addendumGuidance = `${current.guidance}\n${updateNote}\nWrite ONLY a concise post-interview addendum (1-3 sentences or short labeled lines). Do NOT rewrite or restate existing content. Do NOT include open questions. If no new information exists, return empty text and empty citations.`
-          const promptSection: TemplateSection = { ...current, guidance: addendumGuidance }
-          let evidence = rankEvidenceDiverse(
+          const revisionGuidance = `${current.guidance}\n${updateNote}\nIntegrate only new information into the section. Keep structure. Remove redundancy. Do NOT add a separate post-interview note header.`
+          const promptSection: TemplateSection = { ...current, guidance: revisionGuidance }
+          let evidence = rankEvidenceWeighted(
             `${promptSection.title} ${promptSection.guidance}`,
             followupChunks,
+            followupDocs,
             Math.max(6, followupDocs.length * 2),
             { includeUnmatchedSources: true }
           )
           evidence = prioritizeSourceCoverage(evidence)
-          const context = priorOutput
-            ? `Current section text (reference only; do NOT restate):\n${stripInlineChunkIds(normalizeText(priorOutput))}`
-            : 'Current section text is empty. Only add truly new information as a dated post-interview note.'
           try {
-            const generated = await generateSectionWithOpenAI(promptSection, evidence, settings, undefined, context)
+            const context = priorOutput
+              ? `Current section text (revise in place):\n${stripInlineChunkIds(normalizeText(priorOutput))}`
+              : 'Current section text is empty. Generate a full section from follow-up docs only.'
+            const generated = priorOutput
+              ? await editWithOpenAI(
+                  'Integrate the follow-up information into the section. Keep the existing structure and tone. Remove redundancy. If no new information exists, return the original text unchanged.',
+                  priorOutput,
+                  context,
+                  evidence,
+                  settings,
+                  { scope: 'section' }
+                )
+              : await generateSectionWithOpenAI(promptSection, evidence, settings, undefined, context)
             const cleaned = formatSectionText(generated.text, current.id, { stripChunkIds: false })
             const finalText = stripInlineChunkIds(cleaned)
-            if (!finalText.trim()) continue
+            if (!isSubstantiveRevision(priorOutput, finalText)) continue
             let citations = generated.citations || []
             if (citations.length === 0) {
               const extracted = extractCitationsFromText(cleaned, evidence)
@@ -1568,6 +1882,8 @@ export function App() {
             }
             citations = filterCitationsToFollowup(citations, followupIds)
             if (citations.length === 0) continue
+            const updateTag = inferUpdateTag(finalText)
+            const updateSummary = extractUpdateSummary(finalText)
             appendMessage('edit', {
               id: crypto.randomUUID(),
               role: 'assistant',
@@ -1579,9 +1895,11 @@ export function App() {
               editTargetScope: 'section',
               editSectionId: current.id,
               editSectionTitle: current.title,
-              editApplyMode: 'append-note',
+              editApplyMode: 'update-card',
               editNoteDate: today,
-              editNoteSource: sourceNoteLabel
+              editNoteSource: sourceNoteLabel,
+              updateTag,
+              updateSummary
             })
           } catch (err) {
             console.error(err)
@@ -1593,7 +1911,7 @@ export function App() {
       appendMessage('ask', {
         id: crypto.randomUUID(),
         role: 'assistant',
-        text: 'Post-interview updates ready (including open-question answers). Review the cards to apply changes.',
+        text: 'Update cards ready (including open-question answers). Review the cards to apply changes.',
         createdAt: Date.now()
       })
     } finally {
@@ -1716,32 +2034,80 @@ export function App() {
     setFollowupSourceDrafts(prev => ({ ...prev, [questionId]: '' }))
   }
 
-  function addPostInterviewNote() {
+  async function addPostInterviewNote() {
     const { sectionId, text, date, source } = postInterviewDraft
     if (!sectionId || !text.trim()) return
+    if (!settings.openaiApiKey) {
+      appendMessage('ask', {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        text: 'Add your OpenAI API key in Settings to apply updates.',
+        createdAt: Date.now()
+      })
+      return
+    }
     const sourceNote = resolveFollowupSourceNote(source)
-    const manualCitations = buildManualFollowupCitations(sourceNote)
-    appendMessage('edit', {
-      id: crypto.randomUUID(),
-      role: 'assistant',
-      text,
-      citations: manualCitations,
-      createdAt: Date.now(),
-      editStatus: 'pending',
-      editTargetText: trimForDiff((sections.find(s => s.id === sectionId)?.output || '')),
-      editTargetScope: 'section',
-      editSectionId: sectionId,
-      editSectionTitle: sections.find(s => s.id === sectionId)?.title || '',
-      editApplyMode: 'append-note',
-      editNoteDate: date || new Date().toISOString().slice(0, 10),
-      editNoteSource: sourceNote
-    })
-    setPostInterviewDraft(prev => ({
-      ...prev,
-      text: '',
-      source: prev.source.trim() ? prev.source : followupSourceLabel
-    }))
-    setSelectedId(sectionId)
+    const manualDoc = makeDocFromText(`Manual update (${date || 'undated'})`, text, 'txt', undefined, undefined, undefined, 'local', Date.now(), 'followup')
+    const section = sections.find(s => s.id === sectionId)
+    if (!section) return
+    const priorOutput = section?.output || ''
+    const context = priorOutput
+      ? `Current section text (revise in place):\n${stripInlineChunkIds(normalizeText(priorOutput))}`
+      : 'Current section text is empty. Generate a full section from this update.'
+    setPostInterviewBusy(true)
+    try {
+      const generated = priorOutput
+        ? await editWithOpenAI(
+            'Integrate the clinician update into the section. Keep structure and tone. Remove redundancy. If no new information exists, return the original text unchanged.',
+            priorOutput,
+            context,
+            manualDoc.chunks,
+            settings,
+            { scope: 'section' }
+          )
+        : await generateSectionWithOpenAI(
+            { ...section, guidance: `${section?.guidance || ''}\nUse ONLY the provided update.` },
+            manualDoc.chunks,
+            settings,
+            undefined,
+            context
+          )
+      const cleaned = formatSectionText(generated.text, sectionId, { stripChunkIds: false })
+      const finalText = stripInlineChunkIds(cleaned)
+      if (!isSubstantiveRevision(priorOutput, finalText)) return
+      const updateTag = inferUpdateTag(text)
+      const updateSummary = extractUpdateSummary(text)
+      appendMessage('edit', {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        text: finalText,
+        citations: generated.citations || manualDoc.chunks.map(chunk => ({
+          sourceId: manualDoc.id,
+          sourceName: manualDoc.name,
+          chunkId: chunk.id,
+          excerpt: chunk.text.slice(0, 120)
+        })),
+        createdAt: Date.now(),
+        editStatus: 'pending',
+        editTargetText: trimForDiff(priorOutput),
+        editTargetScope: 'section',
+        editSectionId: sectionId,
+        editSectionTitle: section?.title || '',
+        editApplyMode: 'update-card',
+        editNoteDate: date || new Date().toISOString().slice(0, 10),
+        editNoteSource: sourceNote,
+        updateTag,
+        updateSummary
+      })
+      setSelectedId(sectionId)
+    } finally {
+      setPostInterviewBusy(false)
+      setPostInterviewDraft(prev => ({
+        ...prev,
+        text: '',
+        source: prev.source.trim() ? prev.source : followupSourceLabel
+      }))
+    }
   }
 
   function resetOutputs() {
@@ -1765,7 +2131,10 @@ export function App() {
   }
 
   function buildExportSections() {
-    return sections.map(section => ({
+    const visible = includeClinicianOnly
+      ? sections
+      : sections.filter(section => !section.clinicianOnly)
+    return visible.map(section => ({
       ...section,
       output: formatSectionText(section.output || '', section.id)
     }))
@@ -1809,6 +2178,7 @@ export function App() {
     }
     const current = section.output || ''
     const isAppendNote = message.editApplyMode === 'append-note' || message.editApplyMode === 'append-note-after-questions'
+    const isUpdateCard = message.editApplyMode === 'update-card'
     if (isAppendNote) {
       const noteDate = message.editNoteDate || new Date().toISOString().slice(0, 10)
       const noteText = stripInlineChunkIds(normalizeText(message.text || ''))
@@ -1844,6 +2214,31 @@ export function App() {
         )),
         applied: true,
         mode: message.editApplyMode
+      }
+    }
+    if (isUpdateCard) {
+      const nextText = formatSectionText(message.text || '', message.editSectionId)
+      if (!nextText.trim()) {
+        return { nextSections: currentSections, applied: false, mode: message.editApplyMode }
+      }
+      const mergedCitations = [...(section.citations || []), ...(message.citations || [])]
+      const nextTags = message.updateTag
+        ? Array.from(new Set([...(section.updateTags || []), message.updateTag]))
+        : section.updateTags
+      return {
+        nextSections: currentSections.map(s => (
+          s.id === message.editSectionId
+            ? {
+                ...s,
+                output: nextText,
+                citations: mergedCitations,
+                updateTags: nextTags,
+                lastUpdatedAt: Date.now()
+              }
+            : s
+        )),
+        applied: true,
+        mode: 'replace'
       }
     }
     const suggested = formatSectionText(message.text, message.editSectionId, { stripChunkIds: false })
@@ -1955,8 +2350,12 @@ export function App() {
     }
 
     const effectiveSection = sectionOverride || selectedSection
-    const editTargetScope = mode === 'edit' ? (selectionSnippet ? 'selection' : 'section') : undefined
-    const editTargetText = mode === 'edit' ? (selectionSnippet?.text || effectiveSection?.output || '') : ''
+    const hasSelection = Boolean(selectionSnippet?.text)
+    const resolvedScope: ChatMessage['editTargetScope'] = hasSelection && editScope === 'selection' ? 'selection' : 'section'
+    const editTargetScope = mode === 'edit' ? resolvedScope : undefined
+    const editTargetText = mode === 'edit'
+      ? (resolvedScope === 'selection' ? (selectionSnippet?.text || '') : (effectiveSection?.output || ''))
+      : ''
     const editSectionId = mode === 'edit' ? (selectionSnippet?.sectionId || effectiveSection?.id) : undefined
     const editSectionTitle = mode === 'edit'
       ? (selectionSnippet?.sectionId
@@ -2046,7 +2445,7 @@ export function App() {
       const draftContext = mode === 'edit'
         ? buildDraftContext('section', 2500)
         : buildDraftContext(sectionForScope ? 'section' : 'all', sectionForScope ? 2500 : 5000)
-      const selectionContext = selectionSnippet ? `Selected excerpt:\n"${selectionSnippet.text}"` : ''
+      const selectionContext = selectionSnippet ? `Selected excerpt (context only unless scope set to selection):\n"${selectionSnippet.text}"` : ''
       const evidenceContextText = evidenceContext ? `Evidence excerpt (${evidenceContext.sourceName}):\n"${evidenceContext.excerpt}"` : ''
       const fullQuestion = [scopedQuestion, selectionContext, evidenceContextText, draftContext].filter(Boolean).join('\n\n')
 
@@ -2057,10 +2456,20 @@ export function App() {
         : effectiveSection
       const askLimit = Math.max(6, sourceCount || 0)
       let evidence = useAllEvidence
-        ? rankEvidenceDiverse(`${evidenceQuery}`, allChunks, askLimit, { includeUnmatchedSources: true })
+        ? rankEvidenceWeighted(`${evidenceQuery}`, allChunks, docs, askLimit, { includeUnmatchedSources: true })
         : evidenceSection
-          ? rankEvidenceDiverse(`${evidenceSection.title} ${evidenceQuery}`, allChunks, 6, { includeUnmatchedSources: false })
-          : rankEvidenceDiverse(`${evidenceQuery}`, allChunks, 6, { includeUnmatchedSources: false })
+          ? rankEvidenceWeighted(`${evidenceSection.title} ${evidenceQuery}`, allChunks, docs, 6, { includeUnmatchedSources: false })
+          : rankEvidenceWeighted(`${evidenceQuery}`, allChunks, docs, 6, { includeUnmatchedSources: false })
+      if (settings.semanticSearch) {
+        try {
+          const semantic = await rankEvidenceSemantic(`${evidenceQuery}`, allChunks, askLimit)
+          if (semantic && semantic.length > 0) {
+            evidence = semantic
+          }
+        } catch {
+          // fall back to weighted lexical ranking
+        }
+      }
       if (useAllEvidence) {
         evidence = prioritizeFollowupEvidence(prioritizeSourceCoverage(evidence))
       }
@@ -2071,16 +2480,16 @@ export function App() {
       const answer = mode === 'edit'
         ? await editWithOpenAI(
           workingQuestion,
-          selectionSnippet?.text || effectiveSection?.output || '',
+          resolvedScope === 'selection' ? (selectionSnippet?.text || '') : (effectiveSection?.output || ''),
           editContext,
           evidence,
           settings,
-          { scope: selectionSnippet ? 'selection' : 'section' }
+          { scope: resolvedScope }
         )
         : await askWithOpenAI(fullQuestion, evidence, settings)
       const cleanedAnswer = normalizeText(answer.text)
       const strippedAnswer = stripInlineChunkIds(cleanedAnswer).trim()
-      const isSelectionEdit = mode === 'edit' && Boolean(selectionSnippet?.text)
+      const isSelectionEdit = mode === 'edit' && resolvedScope === 'selection' && Boolean(selectionSnippet?.text)
       const normalizedAnswer = isSelectionEdit && selectionSnippet?.text
         ? normalizeSelectionReplacement(strippedAnswer, selectionSnippet.text)
         : strippedAnswer
@@ -2149,7 +2558,7 @@ export function App() {
     setCaseId(null)
     setProfile({ name: '', mrn: '', dob: '' })
     setDocs([])
-    setChatThreads({ ask: [], edit: [] })
+    setChatThreads(createEmptyThreads())
     setOpenQuestions([])
     setLastGeneratedAt(null)
     setFollowupAnswerDrafts({})
@@ -2387,7 +2796,7 @@ export function App() {
   const evidencePreviewShort = evidencePreview.length > 180 ? `${evidencePreview.slice(0, 180)}…` : evidencePreview
 
   return (
-    <div className="h-screen flex overflow-hidden bg-[var(--color-canvas)]">
+    <div className={`app ${settings.dsmBadgeStyle === 'compact' ? 'dsm-compact' : 'dsm-clinical'} h-screen flex overflow-hidden bg-[var(--color-canvas)]`}>
       {/* Left Sidebar - Compact */}
       <aside className={`sidebar flex flex-col h-full transition-all duration-200 ${sidebarExpanded ? 'w-52' : 'w-11'}`}>
         {/* Header + collapse */}
@@ -2578,10 +2987,13 @@ export function App() {
           </div>
           
           <div className="header-actions">
-            {tokenUsage.prompt > 0 && (
-              <div className="token-display" title={`Prompt: ${tokenUsage.prompt.toLocaleString()} | Completion: ${tokenUsage.completion.toLocaleString()}`}>
-                <span>{(tokenUsage.prompt + tokenUsage.completion).toLocaleString()} tokens</span>
-                <span className="token-cost">(~${tokenUsage.cost.toFixed(3)})</span>
+            {tokenUsage.input > 0 && (
+              <div
+                className="token-display"
+                title={`Tier: ${settings.serviceTier} | Input: ${tokenUsage.input.toLocaleString()} (cached ${tokenUsage.cached.toLocaleString()}) | Output: ${tokenUsage.output.toLocaleString()}`}
+              >
+                <span>{(tokenUsage.input + tokenUsage.output).toLocaleString()} tokens</span>
+                <span className="token-cost">est. ${tokenUsage.cost.toFixed(3)}</span>
               </div>
             )}
             <div className="progress-pill">
@@ -2613,8 +3025,13 @@ export function App() {
                   <div className="fixed inset-0 z-40" onClick={() => setActionsOpen(false)} />
                   <div className="dropdown-menu animate-fade-in">
                     <button
-                      onClick={() => {
-                        exportDocx(profile, buildExportSections(), includeChatInExport ? allChatMessages : [])
+                      onClick={async () => {
+                        try {
+                          await exportDocx(profile, buildExportSections(), includeChatInExport ? allChatMessages : [])
+                        } catch (err) {
+                          console.error('DOCX export failed:', err)
+                          alert('Export failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+                        }
                         setActionsOpen(false)
                       }}
                       className="dropdown-item"
@@ -2623,7 +3040,12 @@ export function App() {
                     </button>
                     <button
                       onClick={() => {
-                        exportPdf(profile, buildExportSections(), includeChatInExport ? allChatMessages : [])
+                        try {
+                          exportPdf(profile, buildExportSections(), includeChatInExport ? allChatMessages : [])
+                        } catch (err) {
+                          console.error('PDF export failed:', err)
+                          alert('Export failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+                        }
                         setActionsOpen(false)
                       }}
                       className="dropdown-item"
@@ -2637,6 +3059,13 @@ export function App() {
                     >
                       <span className={`w-3 h-3 rounded border ${includeChatInExport ? 'bg-[var(--color-maple)] border-[var(--color-maple)]' : 'border-[var(--color-border)]'}`} />
                       Include chat
+                    </button>
+                    <button
+                      onClick={() => setIncludeClinicianOnly(v => !v)}
+                      className="dropdown-item"
+                    >
+                      <span className={`w-3 h-3 rounded border ${includeClinicianOnly ? 'bg-[var(--color-maple)] border-[var(--color-maple)]' : 'border-[var(--color-border)]'}`} />
+                      Include clinician-only
                     </button>
                     <div className="h-px bg-[var(--color-border-subtle)] my-1" />
                     <button
@@ -2681,7 +3110,7 @@ export function App() {
                 const isGenerating = Boolean(generatingIds[section.id])
                 const streamingPreview = streamingPreviews[section.id]
                 const rawText = typeof streamingPreview === 'string' ? streamingPreview : (section.output || '')
-                const displayText = formatSectionDisplayText(rawText, section.id)
+                const displayText = sectionDisplayMap.get(section.id) || formatSectionDisplayText(rawText, section.id)
                 const hasSelection = selectionSnippet?.sectionId === section.id
                 const highlightedText = hasSelection
                   ? highlightSelectionInText(displayText, selectionSnippet?.text)
@@ -2691,8 +3120,10 @@ export function App() {
                 const citationCount = section.citations?.length || 0
                 const sectionError = sectionErrors[section.id]
                 const pendingEdit = pendingEditsBySection.get(section.id)
-                const pendingIsAppendNote = pendingEdit
-                  ? pendingEdit.editApplyMode === 'append-note' || pendingEdit.editApplyMode === 'append-note-after-questions'
+                const pendingIsUpdate = pendingEdit
+                  ? pendingEdit.editApplyMode === 'update-card'
+                    || pendingEdit.editApplyMode === 'append-note'
+                    || pendingEdit.editApplyMode === 'append-note-after-questions'
                   : false
                 const pendingIsAnswer = pendingEdit?.editApplyMode === 'open-question-answer'
                 const pendingIsSelection = pendingEdit?.editTargetScope === 'selection' && Boolean(pendingEdit.editSelectionText)
@@ -2718,7 +3149,20 @@ export function App() {
                       {citationCount > 0 && <span className="section-cite">[{citationCount}]</span>}
                       {hasContent && citationCount === 0 && <span className="section-warning">No citations</span>}
                       {isSelected && <span className="section-active-pill">Active</span>}
-                      {hasSelection && <span className="section-selection-pill">Selected excerpt</span>}
+                      {hasSelection && <span className="section-selection-pill">Selection context</span>}
+                      {(section.updateTags && section.updateTags.length > 0) && (
+                        <div className="section-tag-row" title={section.updateTags.join(', ')}>
+                          {section.updateTags.slice(0, 2).map(tag => (
+                            <span key={tag} className="section-tag">
+                              <Tag size={8} />
+                              {tag}
+                            </span>
+                          ))}
+                          {section.updateTags.length > 2 && (
+                            <span className="section-tag muted">+{section.updateTags.length - 2}</span>
+                          )}
+                        </div>
+                      )}
                       {isSelected && !isGenerating && (
                         <button
                           className={`section-action-btn ${isEditing ? 'active' : ''}`}
@@ -2729,6 +3173,18 @@ export function App() {
                           }}
                         >
                           {isEditing ? <X size={10} /> : <Pencil size={10} />}
+                        </button>
+                      )}
+                      {hasContent && (
+                        <button
+                          className="section-action-btn"
+                          title="Polish section"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            polishSection(section)
+                          }}
+                        >
+                          <Sparkles size={10} />
                         </button>
                       )}
                       <button
@@ -2744,20 +3200,25 @@ export function App() {
                     </div>
                     
                       {pendingEdit && (
-                      <div className={`edit-card section-diff-card ${pendingIsAnswer ? 'answer-card' : pendingIsAppendNote ? 'update-card' : ''}`}>
+                      <div className={`edit-card section-diff-card ${pendingIsAnswer ? 'answer-card' : pendingIsUpdate ? 'update-card' : ''}`}>
                         <div className="edit-card-header">
-                          <span className={`edit-status pending ${pendingIsAnswer ? 'answer' : pendingIsAppendNote ? 'update' : ''}`}>
-                            {pendingIsAnswer ? 'Proposed answer' : pendingIsAppendNote ? 'Proposed update' : 'Proposed edit'}
+                          <span className={`edit-status pending ${pendingIsAnswer ? 'answer' : pendingIsUpdate ? 'update' : ''}`}>
+                            {pendingIsAnswer ? 'Proposed answer' : pendingIsUpdate ? 'Proposed update' : 'Proposed edit'}
                           </span>
                           <span className="edit-pill">{pendingIsSelection ? 'Selection' : 'Section'}</span>
-                          {pendingIsAppendNote && (
-                            <span className="edit-pill update-pill">Post-interview update</span>
+                          {pendingIsUpdate && (
+                            <span className="edit-pill update-pill">{pendingEdit.updateTag || 'Update'}</span>
                           )}
                           {pendingIsAnswer && (
                             <span className="edit-pill answer-pill">Open question answer</span>
                           )}
                         </div>
-                        {pendingIsAppendNote ? (
+                        {pendingIsUpdate && pendingEdit.updateSummary && (
+                          <div className="edit-card-summary">
+                            {pendingEdit.updateSummary}
+                          </div>
+                        )}
+                        {pendingIsUpdate && pendingEdit.editApplyMode === 'append-note' ? (
                           <div className="edit-callout">
                             <Markdown
                               className="note-markdown"
@@ -2813,24 +3274,63 @@ export function App() {
                     )}
 
                     {isEditing ? (
-                      <textarea 
-                        className="section-edit-textarea"
-                        defaultValue={section.output || ''}
-                        autoFocus
-                        onKeyDown={(e) => {
-                          if (e.key === 'Escape') {
+                      <div className="section-edit-shell">
+                        <div className="section-edit-meta">
+                          <span>Editing {section.title}</span>
+                          <span>Cmd/Ctrl+Enter to save · Esc to cancel</span>
+                        </div>
+                        <div className="section-edit-toolbar">
+                          <button type="button" onClick={() => insertEditorText('**', '**', 'Label')} title="Bold label">
+                            **Label**
+                          </button>
+                          <button type="button" onClick={() => insertEditorText('Label: ', '', '')} title="Insert label">
+                            Label:
+                          </button>
+                          <button type="button" onClick={() => insertEditorText('- ', '', '')} title="Bullet">
+                            • Bullet
+                          </button>
+                          <button type="button" onClick={() => insertEditorText('1. ', '', '')} title="Numbered list">
+                            1.
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertEditorText('**Key highlights:**\n- ', '', '')}
+                            title="Key highlights block"
+                          >
+                            Highlights
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => insertEditorText('**Open questions:**\n- ', '', '')}
+                            title="Open questions block"
+                          >
+                            Open Qs
+                          </button>
+                        </div>
+                        <textarea 
+                          className="section-edit-textarea"
+                          defaultValue={section.output || ''}
+                          ref={editTextareaRef}
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              setEditingSectionId(null)
+                            }
+                            if (e.key === 'Tab') {
+                              e.preventDefault()
+                              insertEditorText('  ', '', '')
+                            }
+                            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                              handleUpdateSection(section.id, e.currentTarget.value)
+                              setEditingSectionId(null)
+                            }
+                          }}
+                          onBlur={(e) => {
+                            handleUpdateSection(section.id, e.target.value)
                             setEditingSectionId(null)
-                          }
-                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                            handleUpdateSection(section.id, e.currentTarget.value)
-                            setEditingSectionId(null)
-                          }
-                        }}
-                        onBlur={(e) => {
-                          handleUpdateSection(section.id, e.target.value)
-                          setEditingSectionId(null)
-                        }}
-                      />
+                          }}
+                        />
+                      </div>
                     ) : (
                       <div 
                         className={`section-text rendered ${streamingPreview ? 'streaming' : ''}`}
@@ -2880,9 +3380,24 @@ export function App() {
                 <button
                   className={`panel-icon-tab ${activePanel === 'followup' ? 'active' : ''}`}
                   onClick={() => setActivePanel('followup')}
-                  title="Post-interview"
+                  title="Updates"
                 >
                   <Clock size={14} />
+                </button>
+                <button
+                  className={`panel-icon-tab ${activePanel === 'issues' ? 'active' : ''}`}
+                  onClick={() => setActivePanel('issues')}
+                  title="Review issues"
+                >
+                  <AlertTriangle size={14} />
+                  {hasAttendingIssues && <span className="tab-dot" />}
+                </button>
+                <button
+                  className={`panel-icon-tab ${activePanel === 'usage' ? 'active' : ''}`}
+                  onClick={() => setActivePanel('usage')}
+                  title="Usage"
+                >
+                  <BarChart3 size={14} />
                 </button>
                 <button
                   className={`panel-icon-tab ${activePanel === 'template' ? 'active' : ''}`}
@@ -2899,7 +3414,7 @@ export function App() {
                     className="panel-action-btn"
                     title="New chat"
                     onClick={() => {
-                      setChatThreads({ ask: [], edit: [] })
+                      setChatThreads(createEmptyThreads())
                       setSelectionSnippet(null)
                     }}
                   >
@@ -2969,8 +3484,8 @@ export function App() {
                 <div className="p-2 followup-panel">
                   <div className="template-head followup-head">
                     <div>
-                      <div className="template-title">Post-interview</div>
-                      <div className="template-subtitle followup-subtitle">Notes {'->'} cards.</div>
+                      <div className="template-title">Updates</div>
+                      <div className="template-subtitle followup-subtitle">Review new info and apply in-place revisions.</div>
                     </div>
                     <div className="followup-head-actions">
                       {settings.showOpenQuestions ? (
@@ -2989,7 +3504,7 @@ export function App() {
                   <div className="followup-actions">
                     <label className="action-pill cursor-pointer">
                       <Upload size={12} strokeWidth={2} />
-                      <span>Upload notes</span>
+                      <span>Upload updates</span>
                       <input
                         type="file"
                         multiple
@@ -3006,7 +3521,7 @@ export function App() {
                       className="action-pill"
                       onClick={applyAllPostInterviewNotes}
                       disabled={pendingFollowupCount === 0}
-                      title="Apply all pending post-interview updates and open-question answers"
+                      title="Apply all pending updates and open-question answers"
                     >
                       <Pencil size={12} strokeWidth={2} />
                       <span>Apply all ({pendingFollowupCount})</span>
@@ -3028,7 +3543,7 @@ export function App() {
                       className="followup-example-link"
                       onClick={loadFollowupExample}
                       disabled={isGeneratingAll}
-                      title="Loads a sample post-interview note and creates update cards."
+                      title="Loads a sample update note and creates update cards."
                     >
                       Load example
                     </button>
@@ -3067,7 +3582,7 @@ export function App() {
                     </div>
                     <textarea
                       className="post-interview-textarea"
-                      placeholder="Add new info from interview or post-interview documentation..."
+                      placeholder="Add new info to integrate into the section..."
                       value={postInterviewDraft.text}
                       onChange={(e) => setPostInterviewDraft(prev => ({ ...prev, text: e.target.value }))}
                     />
@@ -3106,10 +3621,10 @@ export function App() {
                       <button
                         className="btn btn-primary"
                         onClick={addPostInterviewNote}
-                        disabled={!postInterviewDraft.text.trim()}
+                        disabled={!postInterviewDraft.text.trim() || postInterviewBusy}
                       >
                         <Pencil size={10} />
-                        Add Update
+                        {postInterviewBusy ? 'Applying…' : 'Create update card'}
                       </button>
                     </div>
                   </div>
@@ -3142,7 +3657,7 @@ export function App() {
                                 {isAnswer ? (
                                   <span className="edit-pill answer-pill">Open question answer</span>
                                 ) : (
-                                  <span className="edit-pill update-pill">Post-interview update</span>
+                                  <span className="edit-pill update-pill">{note.updateTag || 'Update'}</span>
                                 )}
                               </div>
                               {isAnswer ? (
@@ -3153,11 +3668,7 @@ export function App() {
                                 <div className="edit-callout">
                                   <Markdown
                                     className="note-markdown"
-                                    text={formatPostInterviewNoteBlock(
-                                      note.text,
-                                      note.editNoteDate || new Date().toISOString().slice(0, 10),
-                                      note.editNoteSource
-                                    )}
+                                    text={note.updateSummary || note.text}
                                   />
                                 </div>
                               )}
@@ -3298,6 +3809,32 @@ export function App() {
                     </div>
                   )}
                 </div>
+              ) : activePanel === 'issues' ? (
+                <IssuesPanel
+                  issues={attendingReviewIssues}
+                  running={runningAttendingReview}
+                  hasApiKey={Boolean(settings.openaiApiKey)}
+                  hasContent={completedSections > 0}
+                  canRun={Boolean(settings.openaiApiKey) && completedSections > 0}
+                  onRun={runAttendingReview}
+                  onSelectSection={(sectionId) => {
+                    setSelectedId(sectionId)
+                    setActivePanel('chat')
+                  }}
+                  resolveSectionTitle={(sectionId) => getSectionTitle(sectionId) || sectionId}
+                />
+              ) : activePanel === 'usage' ? (
+                <UsagePanel
+                  totals={tokenUsage}
+                  events={usageEvents}
+                  onReset={() => {
+                    setTokenUsage({ input: 0, cached: 0, output: 0, cost: 0 })
+                    setUsageEvents([])
+                  }}
+                  serviceTier={settings.serviceTier}
+                  semanticEnabled={settings.semanticSearch}
+                  semanticReady={isSemanticReady()}
+                />
               ) : activePanel === 'template' ? (
                 <div className="p-3 space-y-3">
                   <div className="template-head">
@@ -3425,16 +3962,17 @@ export function App() {
                             && msg.editStatus
                             && msg.editTargetText !== undefined
                           const isAppendNote = msg.editApplyMode === 'append-note' || msg.editApplyMode === 'append-note-after-questions'
+                          const isUpdateCard = msg.editApplyMode === 'update-card' || isAppendNote
                           const isOpenQuestionAnswer = msg.editApplyMode === 'open-question-answer'
                           const contextText = msg.contextSnippet ? msg.contextSnippet.replace(/\s+/g, ' ').trim() : ''
                           const contextDisplay = contextText.length > 240 ? `${contextText.slice(0, 240)}…` : contextText
                           const statusLabel = msg.editStatus === 'pending'
-                            ? (isOpenQuestionAnswer ? 'Proposed answer' : isAppendNote ? 'Proposed update' : 'Proposed edit')
+                            ? (isOpenQuestionAnswer ? 'Proposed answer' : isUpdateCard ? 'Proposed update' : 'Proposed edit')
                             : msg.editStatus === 'applied'
                               ? (msg.editApplyMode === 'append'
                                   ? 'Applied (appended)'
-                                  : isAppendNote
-                                    ? 'Applied (post-interview note)'
+                                  : isUpdateCard
+                                    ? 'Applied (update)'
                                     : isOpenQuestionAnswer
                                       ? 'Applied (open question answer)'
                                     : 'Applied')
@@ -3472,7 +4010,7 @@ export function App() {
                                         <span className="edit-pill">Section: {msg.editSectionTitle}</span>
                                       )}
                                       {isAppendNote && (
-                                        <span className="edit-pill update-pill">Post-interview update</span>
+                                        <span className="edit-pill update-pill">Update note</span>
                                       )}
                                       {isOpenQuestionAnswer && (
                                         <span className="edit-pill answer-pill">Open question answer</span>
@@ -3613,17 +4151,29 @@ export function App() {
                             "{evidencePreviewShort}"
                           </div>
                         )}
-                        {/* Edit scope indicator - shows what will be edited */}
+                        {/* Edit scope indicator - selection is context by default */}
                         {chatMode === 'edit' && selectedSection && (
-                          <div 
-                            className="edit-scope-indicator scope-tooltip" 
-                            data-tooltip={selectionSnippet 
-                              ? "Your edit will replace this selection within the section" 
-                              : "Your edit will revise the entire section content"}
-                          >
-                            <span className="scope-label">Editing:</span>
-                            <span>{selectionSnippet ? 'Selected text' : 'Full section'}</span>
-                            <span className="scope-hint">({selectionSnippet ? 'replaces excerpt' : 'revises all'})</span>
+                          <div className="edit-scope-indicator">
+                            <span className="scope-label">Scope</span>
+                            <button
+                              className={`scope-btn ${editScope === 'section' ? 'active' : ''}`}
+                              type="button"
+                              onClick={() => setEditScope('section')}
+                            >
+                              Section
+                            </button>
+                            {selectionSnippet && (
+                              <button
+                                className={`scope-btn ${editScope === 'selection' ? 'active' : ''}`}
+                                type="button"
+                                onClick={() => setEditScope('selection')}
+                              >
+                                Selection only
+                              </button>
+                            )}
+                            <span className="scope-hint">
+                              {selectionSnippet ? 'Selection is context unless set to Selection only.' : 'Edits apply to the full section.'}
+                            </span>
                           </div>
                         )}
                       </div>
@@ -3639,8 +4189,11 @@ export function App() {
                           rows={1}
                           onInput={e => {
                             const target = e.target as HTMLTextAreaElement
+                            const maxHeight = 360
                             target.style.height = 'auto'
-                            target.style.height = Math.min(target.scrollHeight, 300) + 'px'
+                            const nextHeight = Math.min(target.scrollHeight, maxHeight)
+                            target.style.height = `${nextHeight}px`
+                            target.style.overflowY = target.scrollHeight > maxHeight ? 'auto' : 'hidden'
                           }}
                           onKeyDown={e => {
                             if (e.key === 'Enter' && !e.shiftKey && canSend) {
@@ -3649,6 +4202,7 @@ export function App() {
                               setChatInput('')
                               const target = e.target as HTMLTextAreaElement
                               target.style.height = 'auto'
+                              target.style.overflowY = 'hidden'
                             }
                           }}
                         />
@@ -3716,6 +4270,7 @@ export function App() {
                                 setChatInput('')
                                 if (chatInputRef.current) {
                                   chatInputRef.current.style.height = 'auto'
+                                  chatInputRef.current.style.overflowY = 'hidden'
                                 }
                               }
                             }}
@@ -3756,7 +4311,7 @@ export function App() {
         onSave={handleSaveSettings}
       />
 
-      <FilePreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} />
+      <FilePreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} onUpdate={updateDocMeta} />
     </div>
   )
 }
