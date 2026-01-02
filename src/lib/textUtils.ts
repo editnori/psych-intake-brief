@@ -119,7 +119,7 @@ export function normalizeListBlocks(text: string): string {
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]
     const trimmed = line.trim()
-    const isCalloutLine = /^(open questions?|key highlights|post[- ]interview notes?)(\s*[:(]|$)/i.test(trimmed)
+    const isCalloutLine = /^(open questions?|key highlights|post[- ]interview notes?|updates?)(\s*[:(]|$)/i.test(trimmed)
     const isListLine = /^(-|–|—|−|‒|\d+\.)\s+/.test(trimmed)
     const isIndented = /^\s+/.test(line)
     if (isListLine) {
@@ -166,4 +166,3 @@ export function stripMarkdown(text: string): string {
   out = out.replace(/\n{3,}/g, '\n\n')
   return out.trim()
 }
-

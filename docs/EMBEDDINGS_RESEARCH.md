@@ -121,3 +121,13 @@ Embeddings could improve ranking quality, especially for semantic queries. Howev
 
 Recommend monitoring user feedback on evidence relevance before investing in embedding infrastructure. If users report missing relevant evidence, prioritize Phase 2 prototyping.
 
+
+---
+
+## 2026-01 Update Notes
+
+- Added weighted lexical ranking (doc-type + recency) to improve HPI chronologic ordering.
+- Added an experimental semantic ranking toggle in Settings; currently falls back to lexical until a local model is integrated.
+- Added privacy modes (standard, fragmented chunking, basic PII redaction) to further reduce context exposure.
+
+Next research step: prototype Transformers.js locally, cache model in IndexedDB, and compare recall@10 vs weighted lexical on a 20-case clinical set.

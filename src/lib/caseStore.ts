@@ -34,7 +34,7 @@ export function listCases(): CaseSummary[] {
     .sort((a, b) => b.savedAt - a.savedAt)
 }
 
-export function loadCase(caseId?: string): { id: string; profile: PatientProfile; docs: SourceDoc[]; sections: Array<Pick<TemplateSection, 'id' | 'title' | 'guidance' | 'output' | 'citations' | 'hidden' | 'visibilityCondition' | 'clinicianOnly' | 'doNotCopyForward'>>; chat: ChatThreads; openQuestions: OpenQuestion[]; lastGeneratedAt?: number; savedAt?: number } | null {
+export function loadCase(caseId?: string): { id: string; profile: PatientProfile; docs: SourceDoc[]; sections: Array<Pick<TemplateSection, 'id' | 'title' | 'guidance' | 'output' | 'citations' | 'hidden' | 'visibilityCondition' | 'clinicianOnly' | 'doNotCopyForward' | 'updateTags' | 'lastUpdatedAt' | 'audience' | 'exportable' | 'parentSection'>>; chat: ChatThreads; openQuestions: OpenQuestion[]; lastGeneratedAt?: number; savedAt?: number } | null {
   try {
     const cases = readCases()
     if (cases.length === 0) return null
@@ -81,7 +81,12 @@ export function saveCase(caseId: string | null, profile: PatientProfile, docs: S
       hidden: s.hidden,
       visibilityCondition: s.visibilityCondition,
       clinicianOnly: s.clinicianOnly,
-      doNotCopyForward: s.doNotCopyForward
+      doNotCopyForward: s.doNotCopyForward,
+      updateTags: s.updateTags,
+      lastUpdatedAt: s.lastUpdatedAt,
+      audience: s.audience,
+      exportable: s.exportable,
+      parentSection: s.parentSection
     })),
     chat,
     openQuestions,

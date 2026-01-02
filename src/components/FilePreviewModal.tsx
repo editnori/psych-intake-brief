@@ -1,12 +1,32 @@
+import { useEffect, useState } from 'react'
 import type { SourceDoc } from '../lib/types'
 import { X, FileText } from 'lucide-react'
 
 interface Props {
   doc: SourceDoc | null
   onClose: () => void
+  onUpdate?: (docId: string, updates: Partial<Pick<SourceDoc, 'documentType' | 'episodeDate'>>) => void
 }
 
-export function FilePreviewModal({ doc, onClose }: Props) {
+const DOC_TYPE_OPTIONS: Array<{ value: SourceDoc['documentType']; label: string }> = [
+  { value: 'discharge-summary', label: 'Discharge summary' },
+  { value: 'psych-eval', label: 'Psych eval' },
+  { value: 'progress-note', label: 'Progress note' },
+  { value: 'biopsychosocial', label: 'Biopsychosocial' },
+  { value: 'intake', label: 'Intake' },
+  { value: 'other', label: 'Other' }
+]
+
+export function FilePreviewModal({ doc, onClose, onUpdate }: Props) {
+  const [draftType, setDraftType] = useState<SourceDoc['documentType']>('other')
+  const [draftDate, setDraftDate] = useState<string>('')
+
+  useEffect(() => {
+    if (!doc) return
+    setDraftType(doc.documentType || 'other')
+    setDraftDate(doc.episodeDate || '')
+  }, [doc])
+
   if (!doc) return null
 
   return (
@@ -28,13 +48,48 @@ export function FilePreviewModal({ doc, onClose }: Props) {
           </button>
         </div>
 
-        <div className="px-4 py-3 space-y-2">
+        <div className="px-4 py-3 space-y-3">
           {doc.error && (
             <div className="text-[10px] text-[var(--color-error)]">Error: {doc.error}</div>
           )}
           {doc.warnings?.map((w, idx) => (
             <div key={idx} className="text-[10px] text-[var(--color-text-secondary)]">{w}</div>
           ))}
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="field-label">Document type</label>
+              <select
+                className="input"
+                value={draftType}
+                onChange={(e) => setDraftType(e.target.value as SourceDoc['documentType'])}
+              >
+                {DOC_TYPE_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="field-label">Service date</label>
+              <input
+                className="input"
+                type="date"
+                value={draftDate}
+                onChange={(e) => setDraftDate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {onUpdate && (
+            <div className="flex items-center justify-end">
+              <button
+                className="btn btn-ghost text-[10px]"
+                onClick={() => onUpdate(doc.id, { documentType: draftType, episodeDate: draftDate || undefined })}
+              >
+                Save metadata
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="px-4 pb-4">

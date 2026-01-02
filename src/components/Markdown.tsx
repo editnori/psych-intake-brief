@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -7,7 +7,7 @@ interface Props {
   className?: string
 }
 
-export function Markdown({ text, className }: Props) {
+export const Markdown = memo(function Markdown({ text, className }: Props) {
   const html = useMemo(() => {
     const raw = marked.parse(text || '', { breaks: true }) as string
     let out = raw
@@ -27,7 +27,7 @@ export function Markdown({ text, className }: Props) {
       if (parts.length === 0) return ''
       return parts.map(part => `<p>${part}</p>`).join('')
     }
-    const formatPostInterviewTitle = (title: string) => title.replace(/:\s*$/g, '').trim()
+    const formatCalloutTitle = (title: string) => title.replace(/:\s*$/g, '').trim()
 
     // Key highlights: header + list
     out = out.replace(
@@ -92,51 +92,101 @@ export function Markdown({ text, className }: Props) {
     // Post-interview notes: header + list
     out = out.replace(
       /<p><strong>(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)<\/strong><\/p>\s*<ul>([\s\S]*?)<\/ul>/gi,
-      (_m, title, list) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div><ul>${list}</ul></div>`
+      (_m, title, list) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div><ul>${list}</ul></div>`
     )
     out = out.replace(
       /<p>(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)<\/p>\s*<ul>([\s\S]*?)<\/ul>/gi,
-      (_m, title, list) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div><ul>${list}</ul></div>`
+      (_m, title, list) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div><ul>${list}</ul></div>`
     )
 
     // Post-interview notes: header + paragraph(s)
     out = out.replace(
       /<p><strong>(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)<\/strong><\/p>\s*(<p>[\s\S]*?)(?=<p><strong>|<div class="|<h[1-6]>|$)/gi,
-      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div>${body}</div>`
+      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div>${body}</div>`
     )
     out = out.replace(
       /<p>(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)<\/p>\s*(<p>[\s\S]*?)(?=<p><strong>|<div class="|<h[1-6]>|$)/gi,
-      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div>${body}</div>`
+      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div>${body}</div>`
     )
 
     // Post-interview notes: inline on same paragraph
     out = out.replace(
       /<p><strong>(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)<\/strong>\s*([^<]+)<\/p>/gi,
-      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div><p>${body}</p></div>`
+      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div><p>${body}</p></div>`
     )
     out = out.replace(
       /<p>(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)\s+([^<]+)<\/p>/gi,
-      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div><p>${body}</p></div>`
+      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div><p>${body}</p></div>`
     )
 
     // Post-interview notes: line breaks inside a single paragraph
     out = out.replace(
       /<p><strong>(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)<\/strong><br\s*\/?>\s*([\s\S]*?)<\/p>/gi,
-      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div>${wrapPostInterviewParagraphs(body)}</div>`
+      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div>${wrapPostInterviewParagraphs(body)}</div>`
     )
     out = out.replace(
       /<p>(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)<br\s*\/?>\s*([\s\S]*?)<\/p>/gi,
-      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div>${wrapPostInterviewParagraphs(body)}</div>`
+      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div>${wrapPostInterviewParagraphs(body)}</div>`
     )
 
     // Post-interview notes: heading + list/paragraphs
     out = out.replace(
       /<h[1-6]>(?:<strong>)?(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)(?:<\/strong>)?<\/h[1-6]>\s*<ul>([\s\S]*?)<\/ul>/gi,
-      (_m, title, list) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div><ul>${list}</ul></div>`
+      (_m, title, list) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div><ul>${list}</ul></div>`
     )
     out = out.replace(
       /<h[1-6]>(?:<strong>)?(Post[- ]interview notes?(?:\s*\([^)]*\))?:?)(?:<\/strong>)?<\/h[1-6]>\s*(<p>[\s\S]*?)(?=<p><strong>|<div class="|<h[1-6]>|$)/gi,
-      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatPostInterviewTitle(title)}</div>${body}</div>`
+      (_m, title, body) => `<div class="post-interview"><div class="pi-title">${formatCalloutTitle(title)}</div>${body}</div>`
+    )
+
+    // Updates: header + list
+    out = out.replace(
+      /<p><strong>(Update(?:s)?(?:\s*\([^)]*\))?:?)<\/strong><\/p>\s*<ul>([\s\S]*?)<\/ul>/gi,
+      (_m, title, list) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div><ul>${list}</ul></div>`
+    )
+    out = out.replace(
+      /<p>(Update(?:s)?(?:\s*\([^)]*\))?:?)<\/p>\s*<ul>([\s\S]*?)<\/ul>/gi,
+      (_m, title, list) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div><ul>${list}</ul></div>`
+    )
+
+    // Updates: header + paragraph(s)
+    out = out.replace(
+      /<p><strong>(Update(?:s)?(?:\s*\([^)]*\))?:?)<\/strong><\/p>\s*(<p>[\s\S]*?)(?=<p><strong>|<div class="|<h[1-6]>|$)/gi,
+      (_m, title, body) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div>${body}</div>`
+    )
+    out = out.replace(
+      /<p>(Update(?:s)?(?:\s*\([^)]*\))?:?)<\/p>\s*(<p>[\s\S]*?)(?=<p><strong>|<div class="|<h[1-6]>|$)/gi,
+      (_m, title, body) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div>${body}</div>`
+    )
+
+    // Updates: inline on same paragraph
+    out = out.replace(
+      /<p><strong>(Update(?:s)?(?:\s*\([^)]*\))?:?)<\/strong>\s*([^<]+)<\/p>/gi,
+      (_m, title, body) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div><p>${body}</p></div>`
+    )
+    out = out.replace(
+      /<p>(Update(?:s)?(?:\s*\([^)]*\))?:?)\s+([^<]+)<\/p>/gi,
+      (_m, title, body) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div><p>${body}</p></div>`
+    )
+
+    // Updates: line breaks inside a single paragraph
+    out = out.replace(
+      /<p><strong>(Update(?:s)?(?:\s*\([^)]*\))?:?)<\/strong><br\s*\/?>\s*([\s\S]*?)<\/p>/gi,
+      (_m, title, body) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div>${wrapPostInterviewParagraphs(body)}</div>`
+    )
+    out = out.replace(
+      /<p>(Update(?:s)?(?:\s*\([^)]*\))?:?)<br\s*\/?>\s*([\s\S]*?)<\/p>/gi,
+      (_m, title, body) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div>${wrapPostInterviewParagraphs(body)}</div>`
+    )
+
+    // Updates: heading + list/paragraphs
+    out = out.replace(
+      /<h[1-6]>(?:<strong>)?(Update(?:s)?(?:\s*\([^)]*\))?:?)(?:<\/strong>)?<\/h[1-6]>\s*<ul>([\s\S]*?)<\/ul>/gi,
+      (_m, title, list) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div><ul>${list}</ul></div>`
+    )
+    out = out.replace(
+      /<h[1-6]>(?:<strong>)?(Update(?:s)?(?:\s*\([^)]*\))?:?)(?:<\/strong>)?<\/h[1-6]>\s*(<p>[\s\S]*?)(?=<p><strong>|<div class="|<h[1-6]>|$)/gi,
+      (_m, title, body) => `<div class="update-notes"><div class="pi-title">${formatCalloutTitle(title)}</div>${body}</div>`
     )
 
     const wrapCalloutBlocks = (html: string) => {
@@ -159,7 +209,13 @@ export function Markdown({ text, className }: Props) {
         {
           match: /^post[- ]interview notes?(?:\s*\([^)]*\))?:?$/i,
           className: 'post-interview',
-          title: (text: string) => formatPostInterviewTitle(text),
+          title: (text: string) => formatCalloutTitle(text),
+          titleClass: 'pi-title'
+        },
+        {
+          match: /^updates?(?:\s*\([^)]*\))?:?$/i,
+          className: 'update-notes',
+          title: (text: string) => formatCalloutTitle(text),
           titleClass: 'pi-title'
         }
       ]
@@ -167,7 +223,7 @@ export function Markdown({ text, className }: Props) {
       const splitInlineCallouts = () => {
         const paragraphs = Array.from(doc.body.querySelectorAll('p'))
         for (const p of paragraphs) {
-          if (p.closest('.open-questions, .key-highlights, .post-interview')) continue
+          if (p.closest('.open-questions, .key-highlights, .post-interview, .update-notes')) continue
           const html = p.innerHTML
           if (!/<br\s*\/?>/i.test(html)) continue
           const parts = html.split(/<br\s*\/?>/i)
@@ -200,6 +256,8 @@ export function Markdown({ text, className }: Props) {
         if (keyMatch) return { spec: callouts[1], inlineBody: keyMatch[1].trim() }
         const postMatch = text.match(/^post[- ]interview notes?(?:\s*\([^)]*\))?\s*[:\\-–—]?\s+(.+)$/i)
         if (postMatch) return { spec: callouts[2], inlineBody: postMatch[1].trim() }
+        const updateMatch = text.match(/^updates?(?:\s*\([^)]*\))?\s*[:\\-–—]?\s+(.+)$/i)
+        if (updateMatch) return { spec: callouts[3], inlineBody: updateMatch[1].trim() }
         return null
       }
 
@@ -208,7 +266,7 @@ export function Markdown({ text, className }: Props) {
         const el = node as Element
         const tag = el.tagName.toLowerCase()
         if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag)) return true
-        if (el.classList.contains('open-questions') || el.classList.contains('key-highlights') || el.classList.contains('post-interview')) {
+        if (el.classList.contains('open-questions') || el.classList.contains('key-highlights') || el.classList.contains('post-interview') || el.classList.contains('update-notes')) {
           return true
         }
         return false
@@ -236,7 +294,7 @@ export function Markdown({ text, className }: Props) {
       }
 
       for (const el of elements) {
-        if (el.closest('.open-questions, .key-highlights, .post-interview')) continue
+        if (el.closest('.open-questions, .key-highlights, .post-interview, .update-notes')) continue
         const textContent = el.textContent?.trim() || ''
         let spec = callouts.find(rule => rule.match.test(textContent))
         let inlineBody: string | null = null
@@ -280,7 +338,7 @@ export function Markdown({ text, className }: Props) {
         }
       }
 
-      const existingCallouts = Array.from(doc.body.querySelectorAll('.open-questions, .key-highlights, .post-interview'))
+      const existingCallouts = Array.from(doc.body.querySelectorAll('.open-questions, .key-highlights, .post-interview, .update-notes'))
       for (const wrapper of existingCallouts) {
         absorbFollowingNodes(wrapper)
       }
@@ -326,8 +384,8 @@ export function Markdown({ text, className }: Props) {
         }
       }
 
-      const postInterviewItems = Array.from(doc.body.querySelectorAll('.post-interview li'))
-      for (const li of postInterviewItems) {
+      const updateItems = Array.from(doc.body.querySelectorAll('.post-interview li, .update-notes li'))
+      for (const li of updateItems) {
         const textContent = li.textContent?.trim() || ''
         if (/^source:/i.test(textContent)) {
           li.classList.add('post-interview-source')
@@ -340,7 +398,7 @@ export function Markdown({ text, className }: Props) {
         const listItems = Array.from(doc.body.querySelectorAll('li'))
         for (const li of listItems) {
           // Skip if already in a callout
-          if (li.closest('.open-questions, .key-highlights, .post-interview')) continue
+          if (li.closest('.open-questions, .key-highlights, .post-interview, .update-notes')) continue
           
           const html = li.innerHTML
           // Match **Open questions:** or <strong>Open questions:</strong> inline
@@ -434,4 +492,4 @@ export function Markdown({ text, className }: Props) {
   return (
     <div className={['markdown', className].filter(Boolean).join(' ')} dangerouslySetInnerHTML={{ __html: html }} />
   )
-}
+})

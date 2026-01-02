@@ -22,6 +22,10 @@ interface CitationIndex {
   list: Array<{ id: number; citation: Citation }>
 }
 
+const FONT_SERIF = 'Crimson Pro'
+const FONT_SANS = 'Source Sans 3'
+const FONT_MONO = 'IBM Plex Mono'
+
 function formatMarkdownTables(text: string): string {
   const lines = text.split('\n')
   const out: string[] = []
@@ -84,7 +88,7 @@ type ExportBlock =
 function parseCalloutLabel(line: string): { label: string; kind: 'open' | 'highlights' | 'post'; trailing?: string } | null {
   const trimmed = line.trim()
   if (!trimmed) return null
-  const match = trimmed.match(/^(Open questions|Key highlights|Post[- ]interview notes?)(\s*\([^)]*\))?\s*:?\s*(.*)$/i)
+  const match = trimmed.match(/^(Open questions|Key highlights|Post[- ]interview notes?|Update(?:s)?)(\s*\([^)]*\))?\s*:?\s*(.*)$/i)
   if (!match) return null
   const label = `${match[1]}${match[2] || ''}`.trim()
   const tail = (match[3] || '').trim()
@@ -199,7 +203,7 @@ function runsFromText(text: string, size: number, color: string): TextRun[] {
             text: beforeText,
             size,
             color,
-            font: 'Courier New',
+            font: FONT_SANS,
             break: idx === 0 && lineRuns.length === 0 ? 0 : (lineRuns.length === 0 && lastEnd === 0 ? 1 : 0)
           }))
         }
@@ -216,7 +220,7 @@ function runsFromText(text: string, size: number, color: string): TextRun[] {
         text: `[${badge === 'p' ? 'p' : match[1]}]`,
         size,
         color: badgeColor,
-        font: 'Courier New',
+        font: FONT_MONO,
         bold: true
       }))
       
@@ -231,7 +235,7 @@ function runsFromText(text: string, size: number, color: string): TextRun[] {
           text: afterText,
           size,
           color,
-          font: 'Courier New',
+          font: FONT_SANS,
           break: idx > 0 && lineRuns.length === 0 ? 1 : 0
         }))
       }
@@ -243,7 +247,7 @@ function runsFromText(text: string, size: number, color: string): TextRun[] {
         text: line,
         size,
         color,
-        font: 'Courier New',
+        font: FONT_SANS,
         break: idx === 0 ? 0 : 1
       }))
     } else {
@@ -256,7 +260,7 @@ function runsFromText(text: string, size: number, color: string): TextRun[] {
           text: originalProps.text || '',
           size: originalProps.size || size,
           color: originalProps.color || color,
-          font: 'Courier New',
+          font: FONT_SANS,
           bold: originalProps.bold,
           break: 1
         })
@@ -278,7 +282,7 @@ function buildCalloutTable(label: string, kind: 'open' | 'highlights' | 'post', 
   const style = CALLOUT_STYLES[kind]
   const children: Paragraph[] = [
     new Paragraph({
-      children: [new TextRun({ text: label.toUpperCase(), size: 16, bold: true, color: '6B6356', font: 'Courier New' })],
+      children: [new TextRun({ text: label.toUpperCase(), size: 16, bold: true, color: '6B6356', font: FONT_SANS })],
       spacing: { after: 60 }
     })
   ]
@@ -298,7 +302,7 @@ function buildCalloutTable(label: string, kind: 'open' | 'highlights' | 'post', 
           color: isAnswer ? 'A8423F' : isSource ? 'A8A090' : '0b1b34',
           bold: isAnswer,
           italics: isSource,
-          font: 'Courier New'
+          font: FONT_SANS
         })
       ],
       spacing: { after: 40 }
@@ -328,21 +332,40 @@ function buildCalloutTable(label: string, kind: 'open' | 'highlights' | 'post', 
 
 export interface ExportOptions {
   excludeClinicianOnly?: boolean
+  respectExportable?: boolean
+}
+
+/**
+ * Filter sections based on export options.
+ * - hidden sections are always excluded
+ * - clinicianOnly sections excluded if excludeClinicianOnly is true
+ * - sections with exportable: false are excluded if respectExportable is true
+ * - sections with audience: 'clinician-only' treated same as clinicianOnly
+ */
+function filterSectionsForExport(sections: TemplateSection[], options: ExportOptions = {}): TemplateSection[] {
+  return sections.filter(s => {
+    if (s.hidden) return false
+    
+    // Handle clinician-only sections
+    const isClinicianOnly = s.clinicianOnly || s.audience === 'clinician-only'
+    if (options.excludeClinicianOnly && isClinicianOnly) return false
+    
+    // Handle non-exportable sections
+    if (options.respectExportable && s.exportable === false) return false
+    
+    return true
+  })
 }
 
 export async function exportDocx(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = [], options: ExportOptions = {}) {
-  const visibleSections = sections.filter(s => {
-    if (s.hidden) return false
-    if (options.excludeClinicianOnly && s.clinicianOnly) return false
-    return true
-  })
+  const visibleSections = filterSectionsForExport(sections, options)
   const { map, list } = buildCitationIndex(visibleSections, chat)
   const profileLine = formatProfile(profile)
 
   const paragraphs: Array<Paragraph | Table> = [
     new Paragraph({
       children: [
-        new TextRun({ text: 'PSYCH INTAKE BRIEF', size: 28, bold: true, font: 'Courier New' })
+        new TextRun({ text: 'PSYCH INTAKE BRIEF', size: 28, bold: true, font: FONT_SERIF })
       ],
       spacing: { after: 120 },
       alignment: AlignmentType.LEFT
@@ -351,23 +374,23 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
 
   if (profileLine) {
     paragraphs.push(new Paragraph({
-      children: [new TextRun({ text: profileLine, color: '475569', size: 20, font: 'Courier New' })],
+      children: [new TextRun({ text: profileLine, color: '475569', size: 20, font: FONT_SANS })],
       spacing: { after: 120 }
     }))
   }
 
   paragraphs.push(new Paragraph({
-    children: [new TextRun({ text: `Generated ${new Date().toLocaleString()}`, italics: true, color: '64748b', size: 16, font: 'Courier New' })],
+    children: [new TextRun({ text: `Generated ${new Date().toLocaleString()}`, italics: true, color: '64748b', size: 16, font: FONT_SANS })],
     spacing: { after: 240 }
   }))
 
   for (const section of visibleSections) {
     const citationIds = (section.citations || []).map(c => map.get(`${c.sourceName}::${c.excerpt}`)).filter(Boolean) as number[]
     const headingRuns = [
-      new TextRun({ text: section.title.toUpperCase(), bold: true, font: 'Courier New' })
+      new TextRun({ text: section.title.toUpperCase(), bold: true, font: FONT_SERIF })
     ]
     if (citationIds.length > 0) {
-      headingRuns.push(new TextRun({ text: ` [${citationIds.join(', ')}]`, size: 16, superScript: true, color: '64748b', font: 'Courier New' }))
+      headingRuns.push(new TextRun({ text: ` [${citationIds.join(', ')}]`, size: 16, superScript: true, color: '64748b', font: FONT_SANS }))
     }
     paragraphs.push(new Paragraph({
       children: headingRuns,
@@ -378,7 +401,7 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
     const blocks = buildExportBlocks(section.output || '')
     if (blocks.length === 0) {
       paragraphs.push(new Paragraph({
-        children: [new TextRun({ text: '—', size: 20, color: '94a3b8', font: 'Courier New' })],
+        children: [new TextRun({ text: '—', size: 20, color: '94a3b8', font: FONT_SANS })],
         spacing: { after: 140 }
       }))
       continue
@@ -404,7 +427,7 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
       const msgRuns = runsFromText(msgText, 20, '0b1b34')
       paragraphs.push(new Paragraph({
         children: [
-          new TextRun({ text: `${label}: `, bold: true, font: 'Courier New' }),
+          new TextRun({ text: `${label}: `, bold: true, font: FONT_SANS }),
           ...msgRuns
         ],
         spacing: { after: 80 }
@@ -417,8 +440,8 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
     for (const item of list) {
       paragraphs.push(new Paragraph({
         children: [
-          new TextRun({ text: `[${item.id}] ${item.citation.sourceName}: `, bold: true, color: '1f2937', font: 'Courier New' }),
-          new TextRun({ text: item.citation.excerpt, color: '475569', font: 'Courier New' })
+          new TextRun({ text: `[${item.id}] ${item.citation.sourceName}: `, bold: true, color: '1f2937', font: FONT_SANS }),
+          new TextRun({ text: item.citation.excerpt, color: '475569', font: FONT_SANS })
         ],
         spacing: { after: 80 }
       }))
@@ -430,7 +453,7 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
       default: {
         document: {
           run: {
-            font: 'Courier New',
+            font: FONT_SANS,
             size: 20
           }
         }
@@ -449,11 +472,7 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
 }
 
 export function exportPdf(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = [], options: ExportOptions = {}) {
-  const visibleSections = sections.filter(s => {
-    if (s.hidden) return false
-    if (options.excludeClinicianOnly && s.clinicianOnly) return false
-    return true
-  })
+  const visibleSections = filterSectionsForExport(sections, options)
   const { map, list } = buildCitationIndex(visibleSections, chat)
   const doc = new jsPDF({ unit: 'pt', format: 'letter' })
   const pageHeight = doc.internal.pageSize.height
@@ -481,7 +500,7 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
   }
 
   const renderTextBlock = (text: string, fontSize: number = 10, color: readonly number[] = colors.ink, spacing: number = 14) => {
-    doc.setFont('courier', 'normal')
+    doc.setFont('helvetica', 'normal')
     doc.setFontSize(fontSize)
     doc.setTextColor(color[0], color[1], color[2])
     const lines = doc.splitTextToSize(text, pageWidth - margin * 2)
@@ -536,12 +555,12 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
     doc.rect(margin, y, boxWidth, boxHeight)
 
     let cursorY = y + paddingY + titleHeight + headerGap
-    doc.setFont('courier', 'bold')
+    doc.setFont('helvetica', 'bold')
     doc.setFontSize(9)
     doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
     doc.text(titleLine, margin + paddingX, y + paddingY + 12)
 
-    doc.setFont('courier', 'normal')
+    doc.setFont('helvetica', 'normal')
     doc.setFontSize(10)
     for (const line of bodyLines) {
       if (!line.text) {
@@ -550,13 +569,13 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
       }
       if (line.kind === 'answer') {
         doc.setTextColor(colors.error[0], colors.error[1], colors.error[2])
-        doc.setFont('courier', 'bold')
+        doc.setFont('helvetica', 'bold')
       } else if (line.kind === 'source') {
         doc.setTextColor(colors.source[0], colors.source[1], colors.source[2])
-        doc.setFont('courier', 'italic')
+        doc.setFont('helvetica', 'italic')
       } else {
         doc.setTextColor(colors.ink[0], colors.ink[1], colors.ink[2])
-        doc.setFont('courier', 'normal')
+        doc.setFont('helvetica', 'normal')
       }
       doc.text(line.text, margin + paddingX, cursorY)
       cursorY += lineHeight
@@ -564,7 +583,7 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
     y += boxHeight + 12
   }
 
-  doc.setFont('courier', 'bold')
+  doc.setFont('times', 'bold')
   doc.setFontSize(16)
   doc.setTextColor(colors.ink[0], colors.ink[1], colors.ink[2])
   doc.text('PSYCH INTAKE BRIEF', margin, y)
@@ -576,7 +595,7 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
 
   const profileLine = formatProfile(profile)
   if (profileLine) {
-    doc.setFont('courier', 'normal')
+    doc.setFont('helvetica', 'normal')
     doc.setFontSize(10)
     doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
     doc.text(profileLine, margin, y)
@@ -591,7 +610,7 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
   for (const section of visibleSections) {
     const citationIds = (section.citations || []).map(c => map.get(`${c.sourceName}::${c.excerpt}`)).filter(Boolean) as number[]
     ensureSpace(20)
-    doc.setFont('courier', 'bold')
+    doc.setFont('times', 'bold')
     doc.setFontSize(11)
     doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
     const heading = citationIds.length ? `${section.title.toUpperCase()} [${citationIds.join(', ')}]` : section.title.toUpperCase()
@@ -620,12 +639,12 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
       doc.addPage()
       y = margin
     }
-    doc.setFont('courier', 'bold')
+    doc.setFont('times', 'bold')
     doc.setFontSize(11)
     doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
     doc.text('CHAT ADDENDA', margin, y)
     y += 16
-    doc.setFont('courier', 'normal')
+    doc.setFont('helvetica', 'normal')
     doc.setFontSize(10)
     doc.setTextColor(colors.ink[0], colors.ink[1], colors.ink[2])
     for (const msg of chat) {
@@ -648,12 +667,12 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
       doc.addPage()
       y = margin
     }
-    doc.setFont('courier', 'bold')
+    doc.setFont('times', 'bold')
     doc.setFontSize(11)
     doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
     doc.text('EVIDENCE APPENDIX', margin, y)
     y += 16
-    doc.setFont('courier', 'normal')
+    doc.setFont('helvetica', 'normal')
     doc.setFontSize(9)
     doc.setTextColor(colors.muted[0], colors.muted[1], colors.muted[2])
     for (const item of list) {

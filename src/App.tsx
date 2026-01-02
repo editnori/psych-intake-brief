@@ -19,6 +19,7 @@ import { Markdown } from './components/Markdown'
 import { DiffView } from './components/DiffView'
 import { UsagePanel } from './components/UsagePanel'
 import { IssuesPanel } from './components/IssuesPanel'
+import { ToastContainer, useToast } from './components/Toast'
 
 const MAX_OPEN_QUESTIONS_PER_SECTION = 1
 const DEMOGRAPHIC_QUESTION_PATTERNS = [
@@ -58,8 +59,8 @@ export function App() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
-  const [includeChatInExport, setIncludeChatInExport] = useState(true)
-  const [includeClinicianOnly, setIncludeClinicianOnly] = useState(false)
+  const [includeChatInExport, setIncludeChatInExport] = useState(false)
+  const [includeClinicianOnly, setIncludeClinicianOnly] = useState(true)
   const [caseId, setCaseId] = useState<string | null>(null)
   const [cases, setCases] = useState<Array<{ id: string; savedAt: number; profile: PatientProfile }>>([])
   const [actionsOpen, setActionsOpen] = useState(false)
@@ -68,6 +69,7 @@ export function App() {
   const [selectionSnippet, setSelectionSnippet] = useState<{ text: string; sectionId: string } | null>(null)
   const [evidenceContext, setEvidenceContext] = useState<{ sourceName: string; excerpt: string } | null>(null)
   const [previewDoc, setPreviewDoc] = useState<SourceDoc | null>(null)
+  const { toasts, addToast, dismissToast } = useToast()
   const documentRef = useRef<HTMLDivElement>(null)
   const sectionsRef = useRef<TemplateSection[]>(sections)
   const dsmIndexRef = useRef<ReturnType<typeof buildDsmIndex> | null>(null)
@@ -3026,13 +3028,14 @@ export function App() {
                   <div className="dropdown-menu animate-fade-in">
                     <button
                       onClick={async () => {
+                        setActionsOpen(false)
                         try {
                           await exportDocx(profile, buildExportSections(), includeChatInExport ? allChatMessages : [])
+                          addToast('success', 'DOCX exported successfully')
                         } catch (err) {
                           console.error('DOCX export failed:', err)
-                          alert('Export failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+                          addToast('error', 'Export failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
                         }
-                        setActionsOpen(false)
                       }}
                       className="dropdown-item"
                     >
@@ -3040,13 +3043,14 @@ export function App() {
                     </button>
                     <button
                       onClick={() => {
+                        setActionsOpen(false)
                         try {
                           exportPdf(profile, buildExportSections(), includeChatInExport ? allChatMessages : [])
+                          addToast('success', 'PDF exported successfully')
                         } catch (err) {
                           console.error('PDF export failed:', err)
-                          alert('Export failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+                          addToast('error', 'Export failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
                         }
-                        setActionsOpen(false)
                       }}
                       className="dropdown-item"
                     >
@@ -4312,6 +4316,9 @@ export function App() {
       />
 
       <FilePreviewModal doc={previewDoc} onClose={() => setPreviewDoc(null)} onUpdate={updateDocMeta} />
+
+      {/* Toast notifications */}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   )
 }
