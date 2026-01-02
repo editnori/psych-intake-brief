@@ -275,6 +275,10 @@ export function extractCitationsFromText(text: string, evidence: Chunk[]): Citat
 interface StreamResult {
   content: string
   finished: boolean
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
+  }
 }
 
 async function streamResponse(
@@ -347,6 +351,25 @@ const OPENAI_API_URL = 'https://api.openai.com/v1/responses'
 
 // Default model - locked to gpt-5.2
 const DEFAULT_MODEL = 'gpt-5.2'
+
+// Token usage tracking
+export interface UsageData {
+  promptTokens: number
+  completionTokens: number
+  model: string
+}
+
+type UsageCallback = (usage: UsageData) => void
+const usageCallbacks: Set<UsageCallback> = new Set()
+
+export function onTokenUsage(callback: UsageCallback): () => void {
+  usageCallbacks.add(callback)
+  return () => usageCallbacks.delete(callback)
+}
+
+function emitUsage(usage: UsageData) {
+  usageCallbacks.forEach(cb => cb(usage))
+}
 
 interface OpenAIRequestOptions {
   instructions: string
@@ -424,9 +447,28 @@ async function callOpenAI(
       }
     })
     
+    // Try to extract usage from streamed response
+    if (streamResult.usage) {
+      emitUsage({
+        promptTokens: streamResult.usage.input_tokens || 0,
+        completionTokens: streamResult.usage.output_tokens || 0,
+        model: DEFAULT_MODEL
+      })
+    }
+    
     return streamResult.content || jsonBuffer
   } else {
     const data = await response.json()
+    
+    // Extract and emit usage data
+    if (data.usage) {
+      emitUsage({
+        promptTokens: data.usage.input_tokens || data.usage.prompt_tokens || 0,
+        completionTokens: data.usage.output_tokens || data.usage.completion_tokens || 0,
+        model: DEFAULT_MODEL
+      })
+    }
+    
     return extractOutputText(data)
   }
 }
@@ -457,32 +499,16 @@ Rules for open questions:
 - If documentation says "denies" or "unknown," that's an answer—don't re-ask
 - Each question must specify how the answer would change assessment or plan` : ''
 
-  const instructions = `Role: Psychiatrist preparing colleague for patient interview.
+  const instructions = `Psychiatrist preparing colleague for interview. Output JSON: text, citations.
 
-Output: JSON with keys: text, citations.
+Style: Active voice. Short sentences. No hedging or meta-commentary.
+Format: Labeled lines (Label: content). Dates as MM/YYYY. Meds as Drug dose frequency.
 
-Style:
-- Active voice, direct clinical language
-- No hedging ("appears to", "seems like") or meta-commentary ("Based on evidence...")
-- Default: short labeled lines (Label: content)
-- Dates: MM/YYYY or "3 months ago"; Meds: Drug dose frequency
+DSM-5: [+] met, [-] not met, [?] unknown, [p] partial. Specifier chain: Disorder, severity, course, features. SUD: mild 2-3, moderate 4-5, severe 6+.
 
-DSM-5 notation:
-- [+] criterion met (documented)
-- [-] criterion not met (documented negative)
-- [?] unknown/not assessed
-- [p] partial/subthreshold
-- Specifier chain: [Disorder], [severity], [course], [features]
-- SUD severity: mild (2-3 criteria), moderate (4-5), severe (6+)
+Evidence: Cite every fact [chunkId]. Omit unsupported claims. Excerpts ≤20 words.
 
-Evidence:
-- Every fact requires citation [chunkId]
-- Omit unsupported statements
-- Excerpt: optional, ≤20 words
-
-Sections:
-- Follow section guidance exactly
-- Do not repeat content across sections${openQuestionsBlock}`
+Anti-redundancy: Never repeat content from other sections. Each section stands alone.${openQuestionsBlock}`
 
   const dsmBlock = dsmContext && DSM_ENHANCED_SECTIONS.includes(section.id)
     ? `\nDSM-5 Reference (use for diagnostic criteria mapping, not as citation source):\n${dsmContext}\n`
@@ -538,16 +564,10 @@ export async function askWithOpenAI(
 ): Promise<GeneratedSection> {
   const evidenceText = buildEvidenceContext(evidence, 8000)
 
-  const instructions = `Role: Clinical Q&A for chart review.
+  const instructions = `Chart Q&A. Output JSON: text, citations.
 
-Rules:
-- Answer using ONLY provided evidence
-- Do NOT include chunk IDs in the text. Put evidence in the citations array only.
-- Direct, clinical language — no hedging or filler
-- Use "-" for bullets (avoid "*" or "•")
-- If evidence insufficient: state "Insufficient evidence" then list 2-4 specific follow-up questions
-
-Output: Valid JSON with keys: text, citations`
+Answer from evidence only. No chunk IDs in text. Direct language. Use "-" for bullets.
+If insufficient: state so, list 2-4 follow-ups.`
   const user = `Question: ${question}\n\nEvidence:\n${evidenceText}\n\nReturn JSON with keys: text, citations.`
 
   const jsonSchema = {
@@ -603,16 +623,9 @@ export async function editWithOpenAI(
     ? '- Return ONLY the revised excerpt (no labels, no extra sentences).'
     : '- Return the full revised target text.'
 
-  const instructions = `Role: Clinical copy editor.
+  const instructions = `Clinical editor. Output JSON: text, citations.
 
-Rules:
-- Revise ONLY the target text. ${scopeLine}
-- Preserve meaning and structure unless the request requires change.
-- Use ONLY provided evidence. Do not add new facts.
-- If insufficient evidence to change, return the original target text unchanged.
-- Do NOT include chunk IDs in the text. Put evidence in the citations array only.
-
-Output: Valid JSON with keys: text, citations`
+${scopeLine} Preserve structure unless change requested. Use evidence only. No chunk IDs in text. If insufficient evidence, return original.`
 
   const user = [
     `Edit request: ${request}`,
@@ -670,16 +683,9 @@ export async function recoverCitationsWithOpenAI(
 
   const evidenceText = buildEvidenceContext(evidence)
 
-  const instructions = `Role: Citation recovery for clinical summary.
+  const instructions = `Citation recovery. Output JSON: citations.
 
-Task: Match statements in the summary to supporting evidence chunks.
-
-Rules:
-- Return chunkId for each supported statement
-- Excerpt optional, ≤20 words
-- Empty array if nothing can be cited
-
-Output: Valid JSON with key: citations`
+Match statements to evidence chunks. Return chunkId for each supported claim. Excerpt optional, ≤20 words. Empty array if uncitable.`
   const user = `Summary:\n${text}\n\nEvidence:\n${evidenceText}\n\nReturn JSON with key: citations.`
 
   const content = await callOpenAI(settings, {
@@ -705,23 +711,11 @@ export async function reviewSummaryWithOpenAI(
     .join('\n\n')
   const summary = body.length > maxChars ? body.slice(0, maxChars) + '\n…' : body
 
-  const instructions = `Role: Attending psychiatrist reviewing intake summary for handoff.
+  const instructions = `Attending reviewing intake for handoff. Output JSON: changes (array of {sectionId, revisedText, issue}).
 
-Review for:
-- Contradictions between sections
-- Repeated facts or duplicate open questions
-- Inconsistent risk/safety details
-- Vague or hedging language that should be tightened
-
-Edit rules:
-- Minimal changes only — fix issues, don't rewrite
-- Remove duplicates; keep info in the most appropriate section
-- Never add new clinical facts
-- Return full revised section text (not diffs)
-- issue must be a 1-sentence rationale for the change (no chain-of-thought)
-- Return empty array if no changes needed
-
-Output: Valid JSON with key: changes (array of {sectionId, revisedText, issue})`
+Check: contradictions, duplicates, inconsistent risk data, vague language.
+Fix: minimal edits only. Remove duplicates (keep in appropriate section). No new facts. Return full revised text.
+Issue: 1-sentence rationale. Empty array if nothing to fix.`
 
   // Use higher reasoning effort for review
   const reviewSettings: AppSettings = { ...settings, reasoningEffort: 'high' }
@@ -746,6 +740,61 @@ Output: Valid JSON with key: changes (array of {sectionId, revisedText, issue})`
   }))
 }
 
+export interface AttendingReviewIssue {
+  sectionId: string
+  severity: 'minor' | 'major' | 'blocker'
+  issue: string
+  suggestion?: string
+}
+
+export async function reviewForAttending(
+  sections: TemplateSection[],
+  settings: AppSettings
+): Promise<AttendingReviewIssue[]> {
+  const maxChars = 9000
+  const body = sections
+    .filter(s => !s.hidden && s.output?.trim())
+    .map(s => `## ${s.id} | ${s.title}\n${(s.output || '').trim()}`)
+    .join('\n\n')
+  const summary = body.length > maxChars ? body.slice(0, maxChars) + '\n…' : body
+
+  const instructions = `Attending psychiatrist reviewing NP/PA intake before co-signature. Output JSON: issues.
+
+Evaluate for:
+- Documentation gaps that would require clarification
+- Unclear clinical reasoning or missing differential diagnosis rationale
+- Risk assessment completeness (SI/HI, safety plan, protective factors)
+- Treatment plan specificity (vague vs actionable)
+- DSM-5 criteria documentation (are threshold criteria met/unmet clearly stated?)
+
+Severity levels:
+- blocker: Cannot sign without correction (safety gaps, missing critical info)
+- major: Needs revision before signing (unclear reasoning, incomplete documentation)
+- minor: Would improve quality but can sign as-is (style, clarity)
+
+Output: JSON with key: issues (array of {sectionId, severity, issue, suggestion})
+Empty array if documentation meets attending standards.`
+
+  const reviewSettings: AppSettings = { ...settings, reasoningEffort: 'high' }
+  const content = await callOpenAI(reviewSettings, {
+    instructions,
+    input: `Intake Summary:\n${summary}\n\nReturn JSON now.`,
+    maxTokens: 800
+  })
+
+  const parsed = safeJsonParse<any>(content) || {}
+  const issues = Array.isArray(parsed.issues) ? parsed.issues : []
+
+  return issues
+    .filter((i: any) => i && typeof i.sectionId === 'string' && typeof i.issue === 'string')
+    .map((i: any) => ({
+      sectionId: i.sectionId,
+      severity: ['minor', 'major', 'blocker'].includes(i.severity) ? i.severity : 'minor',
+      issue: i.issue,
+      suggestion: typeof i.suggestion === 'string' ? i.suggestion : undefined
+    }))
+}
+
 export interface OpenQuestionAnswerPayload {
   id: string
   text: string
@@ -761,11 +810,9 @@ export async function answerOpenQuestionsWithOpenAI(
 
   const evidenceText = buildEvidenceContext(evidence)
 
-  const instructions = `Role: Answer clinical questions from chart evidence.
+  const instructions = `Answer clinical questions from chart evidence. Output JSON: answers.
 
-Rules:
-- Use ONLY provided evidence
-- Cite each answer with chunkId
+Evidence only. Cite each answer [chunkId].
 - If unsupported: "Insufficient evidence"
 - Direct clinical language, no hedging
 

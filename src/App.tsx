@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FileText, Sparkles, RefreshCw, FileDown, Loader2, Plus, FolderOpen, Settings, Upload, ChevronRight, Quote, ArrowUp, MoreHorizontal, X, File, MessageSquare, Layers, BookOpen, Clock, ChevronUp, ChevronDown, Eye, EyeOff, Pencil, Lock } from 'lucide-react'
+import { FileText, Sparkles, RefreshCw, FileDown, Loader2, Plus, FolderOpen, Settings, Upload, ChevronRight, Quote, ArrowUp, MoreHorizontal, X, File, MessageSquare, Layers, BookOpen, Clock, ChevronUp, ChevronDown, Eye, EyeOff, Pencil, Lock, ClipboardCheck } from 'lucide-react'
 import { TEMPLATE_SECTIONS } from './lib/template'
 import type { AppSettings, SourceDoc, TemplateSection, PatientProfile, ChatMessage, ChatThreads, Chunk, OpenQuestion, Citation } from './lib/types'
 import { loadFiles, mergeDocuments, makeDocFromText } from './lib/parser'
 import { normalizeText, normalizeMarkdown, stripInlineChunkIds, formatProfile, normalizeLabelBold, normalizeListBlocks, cleanDisplayText } from './lib/textUtils'
 import { rankEvidenceDiverse } from './lib/evidence'
-import { generateSectionWithOpenAI, askWithOpenAI, editWithOpenAI, reviewSummaryWithOpenAI, answerOpenQuestionsWithOpenAI, recoverCitationsWithOpenAI, extractCitationsFromText } from './lib/llm'
+import { generateSectionWithOpenAI, askWithOpenAI, editWithOpenAI, reviewSummaryWithOpenAI, answerOpenQuestionsWithOpenAI, recoverCitationsWithOpenAI, extractCitationsFromText, onTokenUsage, reviewForAttending, AttendingReviewIssue } from './lib/llm'
+import { calculateCost } from './lib/types'
 import { buildDsmIndex, rankDsmEntries, formatDsmEntries, buildDsmQuery } from './lib/dsm'
 import { loadSettings, saveSettings } from './lib/storage'
 import { loadCase, saveCase, deleteCase, listCases } from './lib/caseStore'
@@ -86,7 +87,11 @@ export function App() {
   }))
   const [draggingSectionId, setDraggingSectionId] = useState<string | null>(null)
   const [dragOverSectionId, setDragOverSectionId] = useState<string | null>(null)
+  const [tokenUsage, setTokenUsage] = useState({ prompt: 0, completion: 0, cost: 0 })
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null)
+  const [attendingReviewIssues, setAttendingReviewIssues] = useState<AttendingReviewIssue[]>([])
+  const hasAttendingIssues = attendingReviewIssues.length > 0
+  const [runningAttendingReview, setRunningAttendingReview] = useState(false)
 
   const OPEN_QUESTION_RULES =
     'Open questions are optional and rare. Only ask if missing information would change diagnosis, risk, or disposition, and the question must directly relate to the chief complaint/presenting problem. Limit to 1 question per section. Avoid demographics/metadata (age, DOB, gender, insurance, address). Format exactly:\n**Open questions:**\n- Question? (Reason: ...)'
@@ -94,6 +99,19 @@ export function App() {
   useEffect(() => {
     setModeMenuOpen(false)
   }, [chatMode, activePanel])
+
+  // Track token usage from API calls
+  useEffect(() => {
+    const unsubscribe = onTokenUsage((usage) => {
+      setTokenUsage(prev => {
+        const newPrompt = prev.prompt + usage.promptTokens
+        const newCompletion = prev.completion + usage.completionTokens
+        const newCost = calculateCost({ prompt: newPrompt, completion: newCompletion }, usage.model)
+        return { prompt: newPrompt, completion: newCompletion, cost: newCost }
+      })
+    })
+    return unsubscribe
+  }, [])
 
   useEffect(() => {
     setExpandedCitations({})
@@ -249,7 +267,7 @@ export function App() {
         text: '',
         citations: [],
         createdAt: Date.now(),
-        mode: chatMode,
+        mode: chatMode === 'auto' ? 'ask' : chatMode,
         isTyping: true
       }
     ]
@@ -2294,6 +2312,51 @@ export function App() {
     }
   }
 
+  async function runAttendingReview() {
+    if (!settings.openaiApiKey) return
+    const sectionsToReview = visibleSections.filter(s => (s.output || '').trim())
+    if (sectionsToReview.length === 0) return
+    setRunningAttendingReview(true)
+    setAttendingReviewIssues([])
+    try {
+      const issues = await reviewForAttending(sectionsToReview, settings)
+      setAttendingReviewIssues(issues)
+      if (issues.length === 0) {
+        appendMessage('ask', {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          text: 'Attending review complete. Documentation meets standards for co-signature.',
+          createdAt: Date.now()
+        })
+      } else {
+        const blockers = issues.filter(i => i.severity === 'blocker').length
+        const majors = issues.filter(i => i.severity === 'major').length
+        const minors = issues.filter(i => i.severity === 'minor').length
+        const summary = [
+          blockers > 0 ? `${blockers} blocker(s)` : null,
+          majors > 0 ? `${majors} major` : null,
+          minors > 0 ? `${minors} minor` : null
+        ].filter(Boolean).join(', ')
+        appendMessage('ask', {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          text: `Attending review found ${issues.length} issue(s): ${summary}. Check the Issues panel for details.`,
+          createdAt: Date.now()
+        })
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Attending review failed'
+      appendMessage('ask', {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        text: message,
+        createdAt: Date.now()
+      })
+    } finally {
+      setRunningAttendingReview(false)
+    }
+  }
+
   function handleDocumentSelection() {
     const selection = window.getSelection()
     if (!selection || selection.isCollapsed) return
@@ -2514,7 +2577,13 @@ export function App() {
             </div>
           </div>
           
-          <div className="flex items-center gap-2">
+          <div className="header-actions">
+            {tokenUsage.prompt > 0 && (
+              <div className="token-display" title={`Prompt: ${tokenUsage.prompt.toLocaleString()} | Completion: ${tokenUsage.completion.toLocaleString()}`}>
+                <span>{(tokenUsage.prompt + tokenUsage.completion).toLocaleString()} tokens</span>
+                <span className="token-cost">(~${tokenUsage.cost.toFixed(3)})</span>
+              </div>
+            )}
             <div className="progress-pill">
               <span className="progress-num">{completedSections}</span>
               <span className="progress-total">/{visibleSections.length}</span>
@@ -2568,6 +2637,19 @@ export function App() {
                     >
                       <span className={`w-3 h-3 rounded border ${includeChatInExport ? 'bg-[var(--color-maple)] border-[var(--color-maple)]' : 'border-[var(--color-border)]'}`} />
                       Include chat
+                    </button>
+                    <div className="h-px bg-[var(--color-border-subtle)] my-1" />
+                    <button
+                      onClick={() => {
+                        runAttendingReview()
+                        setActionsOpen(false)
+                      }}
+                      disabled={runningAttendingReview || completedSections === 0 || !settings.openaiApiKey}
+                      className="dropdown-item"
+                    >
+                      {runningAttendingReview ? <Loader2 size={12} className="animate-spin" /> : <ClipboardCheck size={12} />}
+                      Attending Review
+                      {hasAttendingIssues && <span className="ml-1 text-[var(--color-error)]">({attendingReviewIssues.length})</span>}
                     </button>
                     <div className="h-px bg-[var(--color-border-subtle)] my-1" />
                     <button
@@ -2731,22 +2813,34 @@ export function App() {
                     )}
 
                     {isEditing ? (
-                      <div 
-                        className={`section-text editing ${streamingPreview ? 'streaming' : ''}`}
-                        contentEditable
-                        suppressContentEditableWarning
-                        onInput={(e) => handleUpdateSection(section.id, e.currentTarget.innerText || '')}
+                      <textarea 
+                        className="section-edit-textarea"
+                        defaultValue={section.output || ''}
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') {
+                            setEditingSectionId(null)
+                          }
+                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                            handleUpdateSection(section.id, e.currentTarget.value)
+                            setEditingSectionId(null)
+                          }
+                        }}
                         onBlur={(e) => {
-                          handleUpdateSection(section.id, e.currentTarget.innerText || '')
+                          handleUpdateSection(section.id, e.target.value)
                           setEditingSectionId(null)
                         }}
-                      >
-                        {displayText}
-                      </div>
+                      />
                     ) : (
                       <div 
                         className={`section-text rendered ${streamingPreview ? 'streaming' : ''}`}
                         onClick={() => setSelectedId(section.id)}
+                        onDoubleClick={() => {
+                          if (hasContent && !isGenerating) {
+                            setEditingSectionId(section.id)
+                          }
+                        }}
+                        title={hasContent ? 'Double-click to edit' : ''}
                       >
                         <Markdown text={highlightedText} className="note-markdown" />
                       </div>
@@ -2950,7 +3044,10 @@ export function App() {
                   )}
 
                   <div className="post-interview-panel post-interview-note">
-                    <div className="post-interview-title">Post-interview note</div>
+                    <div className="post-interview-title">
+                      <Pencil size={10} className="inline mr-1" />
+                      Add Update
+                    </div>
                     <div className="post-interview-form">
                       <select
                         className="post-interview-select"
@@ -3011,7 +3108,8 @@ export function App() {
                         onClick={addPostInterviewNote}
                         disabled={!postInterviewDraft.text.trim()}
                       >
-                        Add post-interview note
+                        <Pencil size={10} />
+                        Add Update
                       </button>
                     </div>
                   </div>
@@ -3507,12 +3605,25 @@ export function App() {
                         </div>
                         {selectionSnippet && selectionPreviewShort && (
                           <div className="composer-selection-preview" title={selectionPreview}>
-                            “{selectionPreviewShort}”
+                            "{selectionPreviewShort}"
                           </div>
                         )}
                         {evidenceContext && evidencePreviewShort && (
                           <div className="composer-selection-preview evidence" title={evidencePreview}>
-                            “{evidencePreviewShort}”
+                            "{evidencePreviewShort}"
+                          </div>
+                        )}
+                        {/* Edit scope indicator - shows what will be edited */}
+                        {chatMode === 'edit' && selectedSection && (
+                          <div 
+                            className="edit-scope-indicator scope-tooltip" 
+                            data-tooltip={selectionSnippet 
+                              ? "Your edit will replace this selection within the section" 
+                              : "Your edit will revise the entire section content"}
+                          >
+                            <span className="scope-label">Editing:</span>
+                            <span>{selectionSnippet ? 'Selected text' : 'Full section'}</span>
+                            <span className="scope-hint">({selectionSnippet ? 'replaces excerpt' : 'revises all'})</span>
                           </div>
                         )}
                       </div>
@@ -3529,7 +3640,7 @@ export function App() {
                           onInput={e => {
                             const target = e.target as HTMLTextAreaElement
                             target.style.height = 'auto'
-                            target.style.height = Math.min(target.scrollHeight, 200) + 'px'
+                            target.style.height = Math.min(target.scrollHeight, 300) + 'px'
                           }}
                           onKeyDown={e => {
                             if (e.key === 'Enter' && !e.shiftKey && canSend) {

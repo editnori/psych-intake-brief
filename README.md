@@ -295,7 +295,20 @@ No single request contains Jane's full hospitalization narrative, substance hist
 
 All API calls include `store: false`, telling OpenAI not to retain Jane's data for training. Your API key goes directly to OpenAI with no intermediary.
 
-HIPAA compliance requires legal analysis of your specific deployment context. These are architectural choices to minimize data aggregation.
+### Chunking Strategy
+
+Documents are split into ~1200 character chunks with 200-character overlap. Each chunk receives a unique ID (e.g., `discharge-summary_chunk_3`). This chunking serves two purposes:
+
+1. **Evidence precision**: Citations point to specific 1200-character segments, not entire documents
+2. **Request fragmentation**: No API call receives the full document; only relevant chunks travel per section
+
+For a typical 3-document intake like Jane's, this produces ~30-40 chunks. Each section call receives only 8-12 of the most relevant chunks (determined by keyword scoring). The full record never travels in a single request.
+
+### BYOK Architecture
+
+The tool uses Bring Your Own Key (BYOK) architecture. Your API key is stored locally on your device and transmitted directly to OpenAI. There is no intermediary server, no data logging, and no credential storage outside your machine.
+
+HIPAA compliance requires legal analysis of your specific deployment context. These are architectural choices to minimize data aggregation and exposure.
 
 ---
 

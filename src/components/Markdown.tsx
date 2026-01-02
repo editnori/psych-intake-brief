@@ -413,10 +413,20 @@ export function Markdown({ text, className }: Props) {
 
     // DSM-5 criteria notation styling: [+], [-], [?], [p]
     // Convert to styled spans for visual distinction
-    out = out.replace(/\[(\+)\]/g, '<span class="dsm-badge dsm-met" title="Criterion met">[+]</span>')
-    out = out.replace(/\[(-)\]/g, '<span class="dsm-badge dsm-not-met" title="Criterion not met">[-]</span>')
-    out = out.replace(/\[(\?)\]/g, '<span class="dsm-badge dsm-unknown" title="Unknown/not assessed">[?]</span>')
-    out = out.replace(/\[(p)\]/gi, '<span class="dsm-badge dsm-partial" title="Partial/subthreshold">[p]</span>')
+    // Handle various whitespace and formatting variants
+    out = out.replace(/\[\s*\+\s*\]/g, '<span class="dsm-badge dsm-met" title="Criterion met">[+]</span>')
+    out = out.replace(/\[\s*-\s*\]/g, '<span class="dsm-badge dsm-not-met" title="Criterion not met">[-]</span>')
+    out = out.replace(/\[\s*\?\s*\]/g, '<span class="dsm-badge dsm-unknown" title="Unknown/not assessed">[?]</span>')
+    out = out.replace(/\[\s*p\s*\]/gi, '<span class="dsm-badge dsm-partial" title="Partial/subthreshold">[p]</span>')
+    
+    // Handle parenthetical variants: (+), (-), (?), (p)
+    out = out.replace(/\(\s*\+\s*\)(?![^<]*>)/g, '<span class="dsm-badge dsm-met" title="Criterion met">[+]</span>')
+    out = out.replace(/\(\s*-\s*\)(?![^<]*>)/g, '<span class="dsm-badge dsm-not-met" title="Criterion not met">[-]</span>')
+    out = out.replace(/\(\s*\?\s*\)(?![^<]*>)/g, '<span class="dsm-badge dsm-unknown" title="Unknown/not assessed">[?]</span>')
+    out = out.replace(/\(\s*p\s*\)(?![^<]*>)/gi, '<span class="dsm-badge dsm-partial" title="Partial/subthreshold">[p]</span>')
+    
+    // Handle criterion counts like "5/9 criteria" or "X/11 criteria"
+    out = out.replace(/(\d+)\s*\/\s*(\d+)\s*(criteria)/gi, '<strong>$1/$2</strong> $3')
 
     return DOMPurify.sanitize(out, { ADD_ATTR: ['class', 'title'], ADD_TAGS: ['mark'] })
   }, [text])

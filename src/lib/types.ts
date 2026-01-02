@@ -132,3 +132,22 @@ export interface CaseSummary {
   savedAt: number
   profile: PatientProfile
 }
+
+export interface TokenUsage {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  estimatedCost: number
+}
+
+// GPT-5.2 pricing (estimated)
+export const MODEL_PRICING = {
+  'gpt-5.2': { input: 0.00001, output: 0.00003 }, // $0.01/1K input, $0.03/1K output
+  'gpt-4o': { input: 0.0000025, output: 0.00001 },
+  'gpt-4o-mini': { input: 0.00000015, output: 0.0000006 }
+} as const
+
+export function calculateCost(usage: { prompt: number; completion: number }, model: string = 'gpt-5.2'): number {
+  const pricing = MODEL_PRICING[model as keyof typeof MODEL_PRICING] || MODEL_PRICING['gpt-5.2']
+  return (usage.prompt * pricing.input) + (usage.completion * pricing.output)
+}

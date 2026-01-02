@@ -135,10 +135,11 @@ html {
 body {
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.65;
   background: var(--color-canvas);
   color: var(--color-text);
   -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
 }
 
 ::selection {
@@ -240,9 +241,14 @@ body {
 
   /* ==================== HEADER ==================== */
   .header-bar {
-    height: 40px;
+    min-height: 40px;
+    height: auto;
     background: var(--color-paper);
     border-bottom: 1px solid var(--color-border-subtle);
+    flex-wrap: wrap;
+    gap: 4px;
+    padding-top: 6px;
+    padding-bottom: 6px;
   }
 
   /* Evaluation context label */
@@ -252,6 +258,7 @@ body {
     background: var(--color-maple-bg);
     border-radius: 4px;
     white-space: nowrap;
+    flex-shrink: 0;
   }
 
   /* Patient badge - rectangular with subtle rounding */
@@ -260,16 +267,21 @@ body {
     background: var(--color-surface);
     border: none;
     border-radius: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
   }
 
   .patient-input {
     @apply bg-transparent border-none text-[10px] px-2 py-1;
     color: var(--color-text);
-    width: 90px;
+    width: 80px;
+    min-width: 60px;
+    flex-shrink: 1;
   }
 
   .patient-input.name {
-    width: 130px;
+    width: 110px;
+    min-width: 80px;
     font-weight: 500;
     color: var(--color-ink);
   }
@@ -285,11 +297,44 @@ body {
   .patient-sep {
     @apply w-px h-4;
     background: var(--color-border);
+    flex-shrink: 0;
+  }
+
+  /* Hide less critical separators on narrow screens */
+  @media (max-width: 1200px) {
+    .patient-badge .patient-sep:nth-child(n+6) {
+      display: none;
+    }
+    .patient-badge .patient-input:nth-child(n+7) {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1024px) {
+    .patient-badge .patient-sep:nth-child(n+4) {
+      display: none;
+    }
+    .patient-badge .patient-input:nth-child(n+5) {
+      display: none;
+    }
+    .eval-context-label {
+      display: none;
+    }
   }
 
   .saved-dot {
     @apply w-1.5 h-1.5 rounded-full mx-2;
     background: var(--color-success);
+    flex-shrink: 0;
+  }
+
+  /* Header actions container */
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
   }
 
   /* Progress pill */
@@ -297,6 +342,7 @@ body {
     @apply flex items-center gap-1 px-2 py-0.5;
     background: var(--color-surface);
     border-radius: 6px;
+    flex-shrink: 0;
   }
 
   .progress-num {
@@ -329,6 +375,8 @@ body {
     border-radius: 6px;
     color: var(--color-maple);
     background: transparent;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .generate-btn:hover:not(:disabled) {
@@ -339,6 +387,21 @@ body {
   .generate-btn:disabled {
     opacity: 0.35;
     cursor: not-allowed;
+  }
+
+  /* Token/cost display in header */
+  .token-display {
+    @apply flex items-center gap-1 px-2 py-0.5 text-[9px];
+    background: var(--color-surface);
+    border-radius: 6px;
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+  }
+
+  .token-display .token-cost {
+    color: var(--color-maple);
+    font-weight: 500;
   }
 
   /* ==================== RIGHT PANEL ==================== */
@@ -575,12 +638,15 @@ body {
   }
 
   .post-interview-title {
-    font-size: 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 9px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     color: var(--color-text-muted);
-    margin-bottom: 2px;
+    margin-bottom: 4px;
   }
 
   .post-interview-panel.post-interview-note {
@@ -1044,9 +1110,9 @@ body {
   }
 
   .section-label {
-    @apply text-[11px] font-semibold uppercase tracking-wide;
+    @apply text-[11px] font-semibold uppercase;
     color: var(--color-text-secondary);
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
     font-family: var(--font-sans);
   }
 
@@ -1633,6 +1699,58 @@ body {
     border-style: dashed;
   }
 
+  /* Edit scope indicator */
+  .edit-scope-indicator {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 8px;
+    color: var(--color-text-muted);
+    padding: 3px 6px;
+    background: var(--color-surface);
+    border-radius: 4px;
+    border-left: 2px solid var(--color-maple);
+  }
+
+  .edit-scope-indicator .scope-label {
+    font-weight: 600;
+    color: var(--color-maple);
+  }
+
+  .edit-scope-indicator .scope-hint {
+    color: var(--color-text-tertiary);
+    font-style: italic;
+  }
+
+  /* Tooltip for edit scope */
+  .scope-tooltip {
+    position: relative;
+    cursor: help;
+  }
+
+  .scope-tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--color-ink);
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 9px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+    z-index: 100;
+    margin-bottom: 4px;
+  }
+
+  .scope-tooltip:hover::after {
+    opacity: 1;
+  }
+
   .mode-dropdown {
     position: relative;
   }
@@ -1745,15 +1863,16 @@ body {
   .composer-input {
     flex: 1;
     min-width: 0;
-    min-height: 26px;
-    max-height: 200px;
+    min-height: 36px;
+    max-height: 300px;
     font-size: 11px;
-    line-height: 1.5;
+    line-height: 1.6;
     background: transparent;
     border: none;
     color: var(--color-text);
     resize: none;
     overflow-y: auto;
+    padding: 8px 0;
   }
 
   .composer-input::placeholder {
@@ -2137,6 +2256,52 @@ body {
   .section-text.rendered {
     cursor: pointer;
     white-space: normal;
+  }
+
+  /* Inline editing textarea */
+  .section-edit-textarea {
+    width: 100%;
+    min-height: 120px;
+    padding: 8px 10px;
+    font-family: 'Courier New', Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--color-ink);
+    background: var(--color-canvas);
+    border: 1px solid var(--color-maple);
+    border-radius: 6px;
+    resize: vertical;
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-maple-bg);
+  }
+
+  .section-edit-textarea:focus {
+    border-color: var(--color-maple);
+    box-shadow: 0 0 0 3px var(--color-maple-bg);
+  }
+
+  .section-edit-textarea::placeholder {
+    color: var(--color-text-muted);
+  }
+
+  /* Edit hint on hover */
+  .section-text.rendered:hover::after {
+    content: 'Double-click to edit';
+    position: absolute;
+    top: -20px;
+    right: 0;
+    font-size: 9px;
+    color: var(--color-text-muted);
+    background: var(--color-surface);
+    padding: 2px 6px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+  }
+
+  .section-row:hover .section-text.rendered::after {
+    opacity: 1;
   }
 
   .section-text.diff-preview {

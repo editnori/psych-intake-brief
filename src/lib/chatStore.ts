@@ -87,11 +87,11 @@ export function createUserMessage(
   return {
     id: crypto.randomUUID(),
     role: 'user',
-    content,
-    timestamp: Date.now(),
-    sectionId: options?.sectionId,
-    sectionTitle: options?.sectionTitle,
-    selectionSnippet: options?.selectionSnippet
+    text: content,
+    createdAt: Date.now(),
+    editSectionId: options?.sectionId,
+    editSectionTitle: options?.sectionTitle,
+    contextSnippet: options?.selectionSnippet
   }
 }
 
@@ -117,11 +117,9 @@ export function createAssistantMessage(
   return {
     id: crypto.randomUUID(),
     role: 'assistant',
-    content,
-    timestamp: Date.now(),
-    loading: options?.loading,
-    sectionId: options?.sectionId,
-    revisedOutput: options?.revisedOutput,
+    text: content,
+    createdAt: Date.now(),
+    editSectionId: options?.sectionId,
     editApplied: options?.editApplied,
     editApplyMode: options?.editApplyMode,
     editNoteDate: options?.editNoteDate,

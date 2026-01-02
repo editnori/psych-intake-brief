@@ -169,15 +169,103 @@ function buildCitationIndex(sections: TemplateSection[], chat: ChatMessage[] = [
 
 // formatProfile imported from textUtils
 
+// DSM badge colors for DOCX export
+const DSM_COLORS = {
+  met: '16a34a',      // green
+  notMet: 'dc2626',   // red
+  unknown: 'ca8a04',  // amber
+  partial: 'ea580c'   // orange
+}
+
 function runsFromText(text: string, size: number, color: string): TextRun[] {
   const lines = text.split('\n')
-  return lines.map((line, idx) => new TextRun({
-    text: line,
-    size,
-    color,
-    font: 'Courier New',
-    break: idx === 0 ? 0 : 1
-  }))
+  const runs: TextRun[] = []
+  
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx]
+    
+    // Parse DSM badges and create colored runs
+    const dsmPattern = /\[\s*(\+|-|\?|p)\s*\]/gi
+    let lastEnd = 0
+    let match
+    const lineRuns: TextRun[] = []
+    
+    while ((match = dsmPattern.exec(line)) !== null) {
+      // Add text before the badge
+      if (match.index > lastEnd) {
+        const beforeText = line.slice(lastEnd, match.index)
+        if (beforeText) {
+          lineRuns.push(new TextRun({
+            text: beforeText,
+            size,
+            color,
+            font: 'Courier New',
+            break: idx === 0 && lineRuns.length === 0 ? 0 : (lineRuns.length === 0 && lastEnd === 0 ? 1 : 0)
+          }))
+        }
+      }
+      
+      // Add the badge with color
+      const badge = match[1].toLowerCase()
+      const badgeColor = badge === '+' ? DSM_COLORS.met
+        : badge === '-' ? DSM_COLORS.notMet
+        : badge === '?' ? DSM_COLORS.unknown
+        : DSM_COLORS.partial
+      
+      lineRuns.push(new TextRun({
+        text: `[${badge === 'p' ? 'p' : match[1]}]`,
+        size,
+        color: badgeColor,
+        font: 'Courier New',
+        bold: true
+      }))
+      
+      lastEnd = match.index + match[0].length
+    }
+    
+    // Add remaining text after last badge
+    if (lastEnd < line.length) {
+      const afterText = line.slice(lastEnd)
+      if (afterText) {
+        lineRuns.push(new TextRun({
+          text: afterText,
+          size,
+          color,
+          font: 'Courier New',
+          break: idx > 0 && lineRuns.length === 0 ? 1 : 0
+        }))
+      }
+    }
+    
+    // If no DSM badges found, add the whole line
+    if (lineRuns.length === 0) {
+      runs.push(new TextRun({
+        text: line,
+        size,
+        color,
+        font: 'Courier New',
+        break: idx === 0 ? 0 : 1
+      }))
+    } else {
+      // Add break for new lines
+      if (idx > 0 && lineRuns.length > 0) {
+        // Replace first run with a version that has a line break
+        const originalRun = lineRuns[0]
+        const originalProps = (originalRun as any).options || {}
+        lineRuns[0] = new TextRun({
+          text: originalProps.text || '',
+          size: originalProps.size || size,
+          color: originalProps.color || color,
+          font: 'Courier New',
+          bold: originalProps.bold,
+          break: 1
+        })
+      }
+      runs.push(...lineRuns)
+    }
+  }
+  
+  return runs
 }
 
 const CALLOUT_STYLES: Record<'open' | 'highlights' | 'post', { accent: string; fill: string }> = {
