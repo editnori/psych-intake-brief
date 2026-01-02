@@ -22,9 +22,10 @@ interface CitationIndex {
   list: Array<{ id: number; citation: Citation }>
 }
 
-const FONT_SERIF = 'Crimson Pro'
-const FONT_SANS = 'Source Sans 3'
-const FONT_MONO = 'IBM Plex Mono'
+// Use standard fonts that are available on all systems
+const FONT_SERIF = 'Times New Roman'
+const FONT_SANS = 'Arial'
+const FONT_MONO = 'Courier New'
 
 function formatMarkdownTables(text: string): string {
   const lines = text.split('\n')
@@ -333,6 +334,7 @@ function buildCalloutTable(label: string, kind: 'open' | 'highlights' | 'post', 
 export interface ExportOptions {
   excludeClinicianOnly?: boolean
   respectExportable?: boolean
+  includeAppendix?: boolean
 }
 
 /**
@@ -359,91 +361,100 @@ function filterSectionsForExport(sections: TemplateSection[], options: ExportOpt
 
 export async function exportDocx(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = [], options: ExportOptions = {}) {
   const visibleSections = filterSectionsForExport(sections, options)
-  const { map, list } = buildCitationIndex(visibleSections, chat)
+  const { list } = buildCitationIndex(visibleSections, chat)
   const profileLine = formatProfile(profile)
+
+  // Font sizes in half-points (24 = 12pt, 22 = 11pt, 20 = 10pt)
+  const SIZE_TITLE = 32      // 16pt
+  const SIZE_HEADING = 24    // 12pt
+  const SIZE_BODY = 22       // 11pt
+  const SIZE_SMALL = 18      // 9pt
 
   const paragraphs: Array<Paragraph | Table> = [
     new Paragraph({
       children: [
-        new TextRun({ text: 'PSYCH INTAKE BRIEF', size: 28, bold: true, font: FONT_SERIF })
+        new TextRun({ text: 'PSYCH INTAKE BRIEF', size: SIZE_TITLE, bold: true, font: FONT_SERIF })
       ],
-      spacing: { after: 120 },
+      spacing: { after: 200 },
       alignment: AlignmentType.LEFT
     })
   ]
 
   if (profileLine) {
     paragraphs.push(new Paragraph({
-      children: [new TextRun({ text: profileLine, color: '475569', size: 20, font: FONT_SANS })],
-      spacing: { after: 120 }
+      children: [new TextRun({ text: profileLine, color: '333333', size: SIZE_BODY, font: FONT_SANS })],
+      spacing: { after: 100 }
     }))
   }
 
   paragraphs.push(new Paragraph({
-    children: [new TextRun({ text: `Generated ${new Date().toLocaleString()}`, italics: true, color: '64748b', size: 16, font: FONT_SANS })],
-    spacing: { after: 240 }
+    children: [new TextRun({ text: `Generated ${new Date().toLocaleString()}`, italics: true, color: '666666', size: SIZE_SMALL, font: FONT_SANS })],
+    spacing: { after: 300 }
   }))
 
   for (const section of visibleSections) {
-    const citationIds = (section.citations || []).map(c => map.get(`${c.sourceName}::${c.excerpt}`)).filter(Boolean) as number[]
-    const headingRuns = [
-      new TextRun({ text: section.title.toUpperCase(), bold: true, font: FONT_SERIF })
-    ]
-    if (citationIds.length > 0) {
-      headingRuns.push(new TextRun({ text: ` [${citationIds.join(', ')}]`, size: 16, superScript: true, color: '64748b', font: FONT_SANS }))
-    }
+    // Section heading without citation numbers (cleaner look)
     paragraphs.push(new Paragraph({
-      children: headingRuns,
+      children: [
+        new TextRun({ text: section.title.toUpperCase(), bold: true, size: SIZE_HEADING, font: FONT_SERIF })
+      ],
       heading: HeadingLevel.HEADING_2,
-      spacing: { before: 120, after: 60 }
+      spacing: { before: 240, after: 120 }
     }))
 
     const blocks = buildExportBlocks(section.output || '')
     if (blocks.length === 0) {
       paragraphs.push(new Paragraph({
-        children: [new TextRun({ text: '—', size: 20, color: '94a3b8', font: FONT_SANS })],
-        spacing: { after: 140 }
+        children: [new TextRun({ text: '—', size: SIZE_BODY, color: '999999', font: FONT_SANS })],
+        spacing: { after: 200 }
       }))
       continue
     }
     for (const block of blocks) {
       if (block.type === 'callout') {
         paragraphs.push(buildCalloutTable(block.label, block.kind, block.lines))
-        paragraphs.push(new Paragraph({ text: '', spacing: { after: 120 } }))
+        paragraphs.push(new Paragraph({ text: '', spacing: { after: 160 } }))
         continue
       }
       const body = block.lines.join('\n')
-      const bodyRuns = runsFromText(body, 20, '0b1b34')
-      paragraphs.push(new Paragraph({ children: bodyRuns, spacing: { after: 120 } }))
+      const bodyRuns = runsFromText(body, SIZE_BODY, '222222')
+      paragraphs.push(new Paragraph({ children: bodyRuns, spacing: { after: 160, line: 276 } })) // 1.15 line spacing
     }
   }
 
   if (chat.length > 0) {
-    paragraphs.push(new Paragraph({ text: 'CHAT ADDENDA', heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 60 } }))
+    paragraphs.push(new Paragraph({
+      children: [new TextRun({ text: 'CHAT ADDENDA', bold: true, size: SIZE_HEADING, font: FONT_SERIF })],
+      heading: HeadingLevel.HEADING_2,
+      spacing: { before: 300, after: 120 }
+    }))
     for (const msg of chat) {
       const label = msg.role === 'user' ? 'Clinician' : 'Assistant'
-      const citationIds = (msg.citations || []).map(c => map.get(`${c.sourceName}::${c.excerpt}`)).filter(Boolean) as number[]
-      const msgText = formatExportText(msg.text) + (citationIds.length ? ` [${citationIds.join(', ')}]` : '')
-      const msgRuns = runsFromText(msgText, 20, '0b1b34')
+      const msgText = formatExportText(msg.text)
       paragraphs.push(new Paragraph({
         children: [
-          new TextRun({ text: `${label}: `, bold: true, font: FONT_SANS }),
-          ...msgRuns
+          new TextRun({ text: `${label}: `, bold: true, size: SIZE_BODY, font: FONT_SANS }),
+          new TextRun({ text: msgText, size: SIZE_BODY, font: FONT_SANS })
         ],
-        spacing: { after: 80 }
+        spacing: { after: 120 }
       }))
     }
   }
 
-  if (list.length > 0) {
-    paragraphs.push(new Paragraph({ text: 'EVIDENCE APPENDIX', heading: HeadingLevel.HEADING_2, spacing: { before: 200, after: 60 } }))
+  if (options.includeAppendix && list.length > 0) {
+    paragraphs.push(new Paragraph({
+      children: [new TextRun({ text: 'EVIDENCE APPENDIX', bold: true, size: SIZE_HEADING, font: FONT_SERIF })],
+      heading: HeadingLevel.HEADING_2,
+      spacing: { before: 300, after: 120 }
+    }))
     for (const item of list) {
       paragraphs.push(new Paragraph({
         children: [
-          new TextRun({ text: `[${item.id}] ${item.citation.sourceName}: `, bold: true, color: '1f2937', font: FONT_SANS }),
-          new TextRun({ text: item.citation.excerpt, color: '475569', font: FONT_SANS })
+          new TextRun({ text: `[${item.id}] `, bold: true, size: SIZE_SMALL, color: '666666', font: FONT_MONO }),
+          new TextRun({ text: `${item.citation.sourceName}: `, bold: true, size: SIZE_BODY, font: FONT_SANS }),
+          new TextRun({ text: item.citation.excerpt, size: SIZE_BODY, color: '444444', font: FONT_SANS })
         ],
-        spacing: { after: 80 }
+        spacing: { after: 100 }
       }))
     }
   }
@@ -454,14 +465,23 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
         document: {
           run: {
             font: FONT_SANS,
-            size: 20
+            size: SIZE_BODY
           }
         }
       }
     },
     sections: [
       {
-        properties: {},
+        properties: {
+          page: {
+            margin: {
+              top: 1440,    // 1 inch
+              right: 1440,
+              bottom: 1440,
+              left: 1440
+            }
+          }
+        },
         children: paragraphs
       }
     ]
@@ -476,11 +496,11 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
 
 export function exportPdf(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = [], options: ExportOptions = {}) {
   const visibleSections = filterSectionsForExport(sections, options)
-  const { map, list } = buildCitationIndex(visibleSections, chat)
+  const { list } = buildCitationIndex(visibleSections, chat)
   const doc = new jsPDF({ unit: 'pt', format: 'letter' })
   const pageHeight = doc.internal.pageSize.height
   const pageWidth = doc.internal.pageSize.width
-  const margin = 40
+  const margin = 54  // ~0.75 inch margins
   let y = margin
 
   const colors = {
@@ -586,44 +606,51 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
     y += boxHeight + 12
   }
 
+  // Title with underline
   doc.setFont('times', 'bold')
-  doc.setFontSize(16)
+  doc.setFontSize(18)
   doc.setTextColor(colors.ink[0], colors.ink[1], colors.ink[2])
   doc.text('PSYCH INTAKE BRIEF', margin, y)
-  y += 6
+  y += 8
   doc.setDrawColor(colors.maple[0], colors.maple[1], colors.maple[2])
-  doc.setLineWidth(1)
+  doc.setLineWidth(1.5)
   doc.line(margin, y, pageWidth - margin, y)
-  y += 18
+  y += 20
 
+  // Patient profile
   const profileLine = formatProfile(profile)
   if (profileLine) {
     doc.setFont('helvetica', 'normal')
-    doc.setFontSize(10)
+    doc.setFontSize(11)
     doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
     doc.text(profileLine, margin, y)
-    y += 14
+    y += 16
   }
 
+  // Generated timestamp
   doc.setFontSize(9)
   doc.setTextColor(colors.muted[0], colors.muted[1], colors.muted[2])
   doc.text(`Generated ${new Date().toLocaleString()}`, margin, y)
-  y += 18
+  y += 24
 
+  // Sections
   for (const section of visibleSections) {
-    const citationIds = (section.citations || []).map(c => map.get(`${c.sourceName}::${c.excerpt}`)).filter(Boolean) as number[]
-    ensureSpace(20)
+    ensureSpace(30)
+    
+    // Section heading (no citation numbers for cleaner look)
     doc.setFont('times', 'bold')
-    doc.setFontSize(11)
-    doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
-    const heading = citationIds.length ? `${section.title.toUpperCase()} [${citationIds.join(', ')}]` : section.title.toUpperCase()
-    doc.text(heading, margin, y)
-    y += 16
+    doc.setFontSize(12)
+    doc.setTextColor(colors.ink[0], colors.ink[1], colors.ink[2])
+    doc.text(section.title.toUpperCase(), margin, y)
+    y += 18
 
     const blocks = buildExportBlocks(section.output || '')
     if (blocks.length === 0) {
-      renderTextBlock('—', 10, colors.muted)
-      y += 8
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(10)
+      doc.setTextColor(colors.muted[0], colors.muted[1], colors.muted[2])
+      doc.text('—', margin, y)
+      y += 16
       continue
     }
     for (const block of blocks) {
@@ -631,62 +658,91 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
         renderCallout(block)
       } else {
         const text = block.lines.join('\n') || '—'
-        renderTextBlock(text, 10, colors.ink)
-        y += 8
+        renderTextBlock(text, 10, colors.ink, 15)
+        y += 10
       }
     }
   }
 
   if (chat.length > 0) {
-    if (y > pageHeight - margin) {
-      doc.addPage()
-      y = margin
-    }
+    ensureSpace(40)
     doc.setFont('times', 'bold')
-    doc.setFontSize(11)
-    doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
-    doc.text('CHAT ADDENDA', margin, y)
-    y += 16
-    doc.setFont('helvetica', 'normal')
-    doc.setFontSize(10)
+    doc.setFontSize(12)
     doc.setTextColor(colors.ink[0], colors.ink[1], colors.ink[2])
+    doc.text('CHAT ADDENDA', margin, y)
+    y += 18
+    
     for (const msg of chat) {
       const label = msg.role === 'user' ? 'Clinician' : 'Assistant'
-      const citationIds = (msg.citations || []).map(c => map.get(`${c.sourceName}::${c.excerpt}`)).filter(Boolean) as number[]
       const cleaned = formatExportText(msg.text)
-      const suffix = citationIds.length ? ` [${citationIds.join(', ')}]` : ''
-      const lines = doc.splitTextToSize(`${label}: ${cleaned}${suffix}`, 520)
-      for (const line of lines) {
-        ensureSpace(14)
-        doc.text(line, margin, y)
+      
+      // Label in bold
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(10)
+      doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
+      const labelWidth = doc.getTextWidth(`${label}: `)
+      doc.text(`${label}: `, margin, y)
+      
+      // Message content
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(colors.ink[0], colors.ink[1], colors.ink[2])
+      const contentWidth = pageWidth - margin * 2 - labelWidth
+      const lines = doc.splitTextToSize(cleaned, contentWidth)
+      
+      for (let i = 0; i < lines.length; i++) {
+        if (i === 0) {
+          doc.text(lines[i], margin + labelWidth, y)
+        } else {
+          ensureSpace(14)
+          doc.text(lines[i], margin, y)
+        }
         y += 14
       }
-      y += 6
+      y += 8
     }
   }
 
-  if (list.length > 0) {
-    if (y > pageHeight - margin) {
-      doc.addPage()
-      y = margin
-    }
+  if (options.includeAppendix && list.length > 0) {
+    ensureSpace(40)
     doc.setFont('times', 'bold')
-    doc.setFontSize(11)
-    doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
+    doc.setFontSize(12)
+    doc.setTextColor(colors.ink[0], colors.ink[1], colors.ink[2])
     doc.text('EVIDENCE APPENDIX', margin, y)
-    y += 16
-    doc.setFont('helvetica', 'normal')
+    y += 18
+    
     doc.setFontSize(9)
-    doc.setTextColor(colors.muted[0], colors.muted[1], colors.muted[2])
+    const textWidth = pageWidth - margin * 2
     for (const item of list) {
-      const entry = `[${item.id}] ${item.citation.sourceName}: ${item.citation.excerpt}`
-      const lines = doc.splitTextToSize(entry, 520)
-      for (const line of lines) {
-        ensureSpace(12)
-        doc.text(line, margin, y)
-        y += 12
+      // Citation number
+      doc.setFont('courier', 'normal')
+      doc.setTextColor(colors.muted[0], colors.muted[1], colors.muted[2])
+      const numStr = `[${item.id}] `
+      const numWidth = doc.getTextWidth(numStr)
+      doc.text(numStr, margin, y)
+      
+      // Source name
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(colors.text[0], colors.text[1], colors.text[2])
+      const sourceStr = `${item.citation.sourceName}: `
+      doc.text(sourceStr, margin + numWidth, y)
+      const sourceWidth = doc.getTextWidth(sourceStr)
+      
+      // Excerpt
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(colors.muted[0], colors.muted[1], colors.muted[2])
+      const excerptWidth = textWidth - numWidth - sourceWidth
+      const excerptLines = doc.splitTextToSize(item.citation.excerpt, excerptWidth)
+      
+      for (let i = 0; i < excerptLines.length; i++) {
+        if (i === 0) {
+          doc.text(excerptLines[i], margin + numWidth + sourceWidth, y)
+        } else {
+          y += 12
+          ensureSpace(12)
+          doc.text(excerptLines[i], margin + numWidth, y)
+        }
       }
-      y += 6
+      y += 16
     }
   }
 

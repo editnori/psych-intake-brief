@@ -61,6 +61,7 @@ export function App() {
   const [hydrated, setHydrated] = useState(false)
   const [includeChatInExport, setIncludeChatInExport] = useState(false)
   const [includeClinicianOnly, setIncludeClinicianOnly] = useState(true)
+  const [includeAppendix, setIncludeAppendix] = useState(false)
   const [caseId, setCaseId] = useState<string | null>(null)
   const [cases, setCases] = useState<Array<{ id: string; savedAt: number; profile: PatientProfile }>>([])
   const [actionsOpen, setActionsOpen] = useState(false)
@@ -3030,7 +3031,7 @@ export function App() {
                       onClick={async () => {
                         setActionsOpen(false)
                         try {
-                          await exportDocx(profile, buildExportSections(), includeChatInExport ? allChatMessages : [])
+                          await exportDocx(profile, buildExportSections(), includeChatInExport ? allChatMessages : [], { includeAppendix })
                           addToast('success', 'DOCX exported successfully')
                         } catch (err) {
                           console.error('DOCX export failed:', err)
@@ -3045,7 +3046,7 @@ export function App() {
                       onClick={() => {
                         setActionsOpen(false)
                         try {
-                          exportPdf(profile, buildExportSections(), includeChatInExport ? allChatMessages : [])
+                          exportPdf(profile, buildExportSections(), includeChatInExport ? allChatMessages : [], { includeAppendix })
                           addToast('success', 'PDF exported successfully')
                         } catch (err) {
                           console.error('PDF export failed:', err)
@@ -3070,6 +3071,13 @@ export function App() {
                     >
                       <span className={`w-3 h-3 rounded border ${includeClinicianOnly ? 'bg-[var(--color-maple)] border-[var(--color-maple)]' : 'border-[var(--color-border)]'}`} />
                       Include clinician-only
+                    </button>
+                    <button
+                      onClick={() => setIncludeAppendix(v => !v)}
+                      className="dropdown-item"
+                    >
+                      <span className={`w-3 h-3 rounded border ${includeAppendix ? 'bg-[var(--color-maple)] border-[var(--color-maple)]' : 'border-[var(--color-border)]'}`} />
+                      Include evidence appendix
                     </button>
                     <div className="h-px bg-[var(--color-border-subtle)] my-1" />
                     <button
