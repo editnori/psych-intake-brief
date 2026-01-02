@@ -468,7 +468,10 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
   })
 
   const blob = await Packer.toBlob(doc)
-  saveAs(blob, `psych-intake-${Date.now()}.docx`)
+  const safeName = (profile.name || 'patient').replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()
+  const timestamp = new Date().toISOString().slice(0, 10)
+  const filename = `psych-intake-${safeName}-${timestamp}.docx`
+  saveAs(blob, filename)
 }
 
 export function exportPdf(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = [], options: ExportOptions = {}) {
@@ -687,5 +690,8 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
     }
   }
 
-  doc.save(`psych-intake-${Date.now()}.pdf`)
+  const safeName = (profile.name || 'patient').replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()
+  const timestamp = new Date().toISOString().slice(0, 10)
+  const filename = `psych-intake-${safeName}-${timestamp}.pdf`
+  doc.save(filename)
 }
