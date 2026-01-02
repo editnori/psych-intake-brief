@@ -561,14 +561,90 @@ Rules for open questions:
   const instructions = `Clinician-to-clinician handoff. Output JSON: text, citations.
 
 Style: Clear, structured, concise. Active voice. Short sentences. No hedging or meta-commentary.
-Format: Labeled lines (Label: content). Dates as MM/YYYY. Meds as Drug dose frequency.
-Redundancy: Remove repetition. Do not restate other sections. Keep only section-specific essentials.
 
-DSM-5: [+] met, [-] not met, [?] unknown, [p] partial. Specifier chain: Disorder, severity, course, features. SUD: mild 2-3, moderate 4-5, severe 6+.
+=== FORMATTING RULES (STRICT - VIOLATIONS WILL BE REJECTED) ===
 
-Evidence: Cite every fact [chunkId]. Omit unsupported claims. Excerpts ≤20 words.
+YOU MUST FOLLOW THESE RULES EXACTLY. DO NOT DEVIATE.
 
-Anti-redundancy: Never repeat content from other sections. Each section stands alone.${openQuestionsBlock}`
+FORBIDDEN (NEVER DO THIS - WILL CAUSE REJECTION):
+- Inline paragraph-style content with periods or semicolons separating data points
+- BAD: "Alcohol: onset 18. Pattern 1-2 drinks on weekends. Last use 1 week prior."
+- BAD: "Criteria: A1 depressed mood; A2 anhedonia; A3 appetite; A4 insomnia"
+- BAD: "MDD (status: provisional)\\nCriteria: A1...; A2...; A3..."
+- Multiple data points crammed into one bullet or paragraph
+- DSM criteria listed inline on one line (EACH CRITERION MUST BE ITS OWN BULLET)
+- Badges [+]/[-]/[?] placed after items
+- Using "—" or "–" as label separators
+
+REQUIRED (ALWAYS DO THIS):
+1. Each substance/category gets its own **Bold Header:** on a standalone line
+2. Badge goes immediately after the colon: **Alcohol:** [-] no AUD
+3. Each data point is a separate bullet below the header
+4. Blank line between each header block
+
+CORRECT FORMAT (COPY THIS STRUCTURE EXACTLY):
+
+**Alcohol:** [-] no AUD
+- Onset: 18
+- Pattern: 1-2 drinks/weekends
+- Last use: 10/2024
+- Criteria: 0/11
+
+**Cannabis:** [?] insufficient data
+- Onset: unknown
+- Pattern: occasional
+- Last use: 10/2024
+
+**Tobacco:** [-] no TUD
+- Denies
+
+**Toxicology:**
+- UDS: THC positive
+- EtOH: negative
+
+**Labs:**
+- Na: 139
+- K: 4.1
+- TSH: 2.1
+
+Problem List:
+Disposition: Outpatient; Safety plan: reviewed 11/2024; Follow-up: psychiatry 2 weeks, therapy 1 week
+1. [+] **Major Depressive Disorder, recurrent, moderate**: Sertraline 100mg daily
+2. [?] **Insomnia Disorder**: Trazodone 50mg PRN
+
+DSM-5 Criteria Analysis (when applicable):
+**Major Depressive Disorder (MDD):** [p] partial criteria
+
+**Symptom Criteria:**
+- [+] A1 Depressed mood: "depressed mood for 3 months"
+- [+] A2 Anhedonia: "anhedonia"
+- [+] A3 Weight/appetite: "decreased appetite"
+- [+] A4 Sleep disturbance: "insomnia"
+- [?] A5 Psychomotor change: not documented
+- [+] A6 Fatigue: "low energy"
+- [?] A7 Worthlessness/guilt: not documented
+- [+] A8 Concentration: "poor concentration"
+- [+] A9 Suicidal ideation: "passive SI"
+
+**Thresholds:**
+- [+] Symptom count: 7/9 (requires 5+)
+- [+] Duration: "for 3 months"
+- [?] Impairment: not explicitly documented
+
+**Rule-outs:**
+- [-] Mania: denies
+- [?] Substance-induced: unclear
+- [?] Medical causes: not documented
+
+**Missing for certainty:**
+- Psychomotor change
+- Worthlessness/guilt
+
+=== END FORMATTING ===
+
+DSM-5 badges: [+] met, [-] not met, [?] unknown, [p] partial. SUD: mild 2-3, moderate 4-5, severe 6+.
+Evidence: Cite every fact [chunkId]. Omit unsupported claims.
+Anti-redundancy: Each section stands alone.${openQuestionsBlock}`
 
   const dsmBlock = dsmContext && DSM_ENHANCED_SECTIONS.includes(section.id)
     ? `\nDSM-5 Reference (use for diagnostic criteria mapping, not as citation source):\n${dsmContext}\n`
@@ -602,10 +678,14 @@ Anti-redundancy: Never repeat content from other sections. Each section stands a
     }
   }
 
+  // DSM-5 analysis sections need higher token limit due to detailed criteria mapping
+  const isDsmSection = section.id === 'dsm5_analysis' || section.id === 'problem_list'
+  const maxTokens = isDsmSection ? 3500 : 2000
+
   const content = await callOpenAI(settings, {
     instructions,
     input: user,
-    maxTokens: 2000,
+    maxTokens,
     jsonSchema,
     stream: Boolean(onDelta),
     onDelta,

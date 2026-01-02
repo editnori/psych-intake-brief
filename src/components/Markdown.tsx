@@ -9,7 +9,57 @@ interface Props {
 
 export const Markdown = memo(function Markdown({ text, className }: Props) {
   const html = useMemo(() => {
-    const raw = marked.parse(text || '', { breaks: true }) as string
+    // Pre-process text to fix common LLM formatting issues before markdown parsing
+    let normalizedText = text || ''
+    
+    // 1. Add blank line before any **Label:** pattern that doesn't already have one
+    // This catches headers at start of lines and after other content
+    normalizedText = normalizedText.replace(/([^\n])\n(\*\*[A-Za-z][^*]*:\*\*)/g, '$1\n\n$2')
+    
+    // 2. Fix cases where **Label:** appears inline after text (no newline at all)
+    normalizedText = normalizedText.replace(/([^\n\*])(\*\*[A-Za-z][A-Za-z0-9\s\-\/]+:\*\*)/g, '$1\n\n$2')
+    
+    // 3. Add blank line before **Label:** that follows a list item ending
+    normalizedText = normalizedText.replace(/(^- [^\n]+)\n(\*\*[A-Za-z])/gm, '$1\n\n$2')
+    
+    // 4. Handle cases where there's text immediately followed by **Label: on same line
+    // e.g., "none documented**Cannabis:**" -> "none documented\n\n**Cannabis:**"
+    normalizedText = normalizedText.replace(/([a-z])\*\*([A-Z][A-Za-z\s\/\-]+:)\*\*/g, '$1\n\n**$2**')
+    
+    // 5. Handle cases where badge is followed immediately by header
+    // e.g., "[-] no TUD**Cannabis:**" -> "[-] no TUD\n\n**Cannabis:**"  
+    normalizedText = normalizedText.replace(/(\])\*\*([A-Z])/g, '$1\n\n**$2')
+    
+    // 6. Handle colon followed immediately by bold header
+    // e.g., "none documented\nTobacco/Nicotine: [-]" patterns where label isn't bold
+    normalizedText = normalizedText.replace(/\n([A-Z][A-Za-z\/\-\s]+:)\s*\[/g, '\n\n**$1** [')
+    
+    // 7. Fix DSM-5 inline criteria patterns: "Criteria: A1...; A2...; A3..." -> bulleted list
+    // Match patterns like "Criteria: A1 depressed mood (3 months) ; A2 anhedonia ; A3..."
+    normalizedText = normalizedText.replace(
+      /^(Criteria|Symptom Criteria|Thresholds|Rule[- ]?outs|Missing for certainty):\s*([^[\n]+(?:\s*;\s*[^[\n]+)+)\s*$/gmi,
+      (_match, label, content) => {
+        const items = content.split(/\s*;\s*/).filter((s: string) => s.trim())
+        if (items.length <= 1) return _match
+        return `**${label}:**\n${items.map((item: string) => `- ${item.trim()}`).join('\n')}`
+      }
+    )
+    
+    // 8. Fix inline "Criteria:" patterns that have badge notation
+    // e.g., "Criteria: A1 depressed mood (3 months) ; A2 anhedonia"
+    normalizedText = normalizedText.replace(
+      /^(Criteria|Symptom Criteria|Thresholds|Rule[- ]?outs):\s*(A\d[^;\n]+(?:\s*;\s*A\d[^;\n]+)+)/gmi,
+      (_match, label, content) => {
+        const items = content.split(/\s*;\s*/).filter((s: string) => s.trim())
+        if (items.length <= 1) return _match
+        return `**${label}:**\n${items.map((item: string) => `- ${item.trim()}`).join('\n')}`
+      }
+    )
+    
+    // 9. Normalize multiple blank lines to just two
+    normalizedText = normalizedText.replace(/\n{3,}/g, '\n\n')
+    
+    const raw = marked.parse(normalizedText, { breaks: true }) as string
     let out = raw
     const wrapOpenQuestionParagraphs = (body: string) => {
       const parts = body
@@ -468,6 +518,11 @@ export const Markdown = memo(function Markdown({ text, className }: Props) {
     }
 
     out = wrapCalloutBlocks(out)
+
+    // Fix unrendered bold markdown patterns like "**Label:**" that appear as raw text
+    // This catches cases where markdown wasn't processed due to inline context
+    out = out.replace(/\*\*([^*:]+):\*\*/g, '<strong>$1:</strong>')
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
 
     // DSM-5 criteria notation styling: [+], [-], [?], [p]
     // Convert to styled spans for visual distinction

@@ -2453,6 +2453,78 @@ body {
     text-underline-offset: 3px;
   }
 
+  /* Subsection headers with proper spacing */
+  /* Any paragraph that starts with a bold element is a subsection header */
+  .markdown p > strong:first-child {
+    font-weight: 600;
+    color: var(--color-ink);
+    letter-spacing: -0.01em;
+  }
+
+  /* Paragraph containing a bold header (starts with strong) */
+  .markdown p:has(> strong:first-child) {
+    margin-top: 1.25em;
+    margin-bottom: 0.25em;
+    line-height: 1.4;
+  }
+
+  /* First paragraph doesn't need top margin */
+  .markdown > p:first-child:has(> strong:first-child) {
+    margin-top: 0;
+  }
+
+  /* List after header - tight coupling */
+  .markdown p:has(> strong:first-child) + ul,
+  .markdown p:has(> strong:first-child) + ol {
+    margin-top: 0;
+    margin-bottom: 0.75em;
+  }
+
+  /* Add spacing AFTER lists before next header paragraph */
+  .markdown ul + p:has(> strong:first-child),
+  .markdown ol + p:has(> strong:first-child) {
+    margin-top: 1.5em;
+  }
+
+  /* Consecutive header paragraphs (no list between them) */
+  .markdown p:has(> strong:first-child) + p:has(> strong:first-child) {
+    margin-top: 1em;
+  }
+
+  /* Nested list items with proper indentation */
+  .markdown ul ul,
+  .markdown ol ul,
+  .markdown ul ol,
+  .markdown ol ol {
+    margin-top: 0.15em;
+    margin-bottom: 0.15em;
+  }
+
+  /* Numbered list styling for Problem List */
+  .markdown ol {
+    list-style-type: decimal;
+    padding-left: 1.5em;
+  }
+
+  .markdown ol > li {
+    margin: 0.6em 0;
+  }
+
+  /* Problem List items with bold diagnoses - add spacing */
+  .markdown ol > li > strong:first-child {
+    color: var(--color-ink);
+  }
+
+  /* Unordered list items */
+  .markdown ul > li {
+    margin: 0.25em 0;
+  }
+
+  /* More spacing between items that start with bold text */
+  .markdown ul > li:has(> strong:first-child) {
+    margin-top: 0.4em;
+  }
+
   /* DSM-5 criteria notation badges */
   .dsm-badge {
     display: inline-block;

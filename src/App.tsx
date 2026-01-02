@@ -62,6 +62,7 @@ export function App() {
   const [includeChatInExport, setIncludeChatInExport] = useState(false)
   const [includeClinicianOnly, setIncludeClinicianOnly] = useState(true)
   const [includeAppendix, setIncludeAppendix] = useState(false)
+  const [includeOpenQuestions, setIncludeOpenQuestions] = useState(false)
   const [caseId, setCaseId] = useState<string | null>(null)
   const [cases, setCases] = useState<Array<{ id: string; savedAt: number; profile: PatientProfile }>>([])
   const [actionsOpen, setActionsOpen] = useState(false)
@@ -1588,7 +1589,18 @@ export function App() {
     const current = sections.find(s => s.id === section.id)
     const priorOutput = current?.output || ''
     if (!priorOutput.trim()) return
-    const request = 'Polish for clarity and brevity. Remove redundancy and tighten phrasing. Preserve facts and structure. Do NOT add new information.'
+    const request = `Polish for clarity, brevity, and consistent formatting.
+
+FORMATTING RULES:
+1. Bold headers on their own line: **Label:** followed by bullet points below
+2. Each data point on its own bullet line (never semicolon-separated inline)
+3. Badges [+]/[-]/[?] at START of items: "- [+] Item" not "- Item [+]"
+4. Use ":" for label-value separation (not em-dashes)
+5. Blank line between header blocks
+6. Narrative content stays as paragraphs; structured data as bulleted lists
+7. No empty headers (skip if no content)
+
+Remove redundancy, tighten phrasing. Preserve all facts. Do NOT add new information.`
     const evidence = rankEvidenceWeighted(
       `${section.title} ${section.guidance}`,
       allChunks,
@@ -3031,7 +3043,7 @@ export function App() {
                       onClick={async () => {
                         setActionsOpen(false)
                         try {
-                          await exportDocx(profile, buildExportSections(), includeChatInExport ? allChatMessages : [], { includeAppendix })
+                          await exportDocx(profile, buildExportSections(), includeChatInExport ? allChatMessages : [], { includeAppendix, includeOpenQuestions })
                           addToast('success', 'DOCX exported successfully')
                         } catch (err) {
                           console.error('DOCX export failed:', err)
@@ -3046,7 +3058,7 @@ export function App() {
                       onClick={() => {
                         setActionsOpen(false)
                         try {
-                          exportPdf(profile, buildExportSections(), includeChatInExport ? allChatMessages : [], { includeAppendix })
+                          exportPdf(profile, buildExportSections(), includeChatInExport ? allChatMessages : [], { includeAppendix, includeOpenQuestions })
                           addToast('success', 'PDF exported successfully')
                         } catch (err) {
                           console.error('PDF export failed:', err)
@@ -3078,6 +3090,13 @@ export function App() {
                     >
                       <span className={`w-3 h-3 rounded border ${includeAppendix ? 'bg-[var(--color-maple)] border-[var(--color-maple)]' : 'border-[var(--color-border)]'}`} />
                       Include evidence appendix
+                    </button>
+                    <button
+                      onClick={() => setIncludeOpenQuestions(v => !v)}
+                      className="dropdown-item"
+                    >
+                      <span className={`w-3 h-3 rounded border ${includeOpenQuestions ? 'bg-[var(--color-maple)] border-[var(--color-maple)]' : 'border-[var(--color-border)]'}`} />
+                      Include open questions
                     </button>
                     <div className="h-px bg-[var(--color-border-subtle)] my-1" />
                     <button
