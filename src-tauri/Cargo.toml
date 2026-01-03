@@ -1,6 +1,6 @@
 [package]
 name = "psych-intake-brief"
-version = "0.0.2"
+version = "0.0.4"
 description = "Psychiatric Intake Summarization Tool"
 authors = ["Dr. Layth M Qassem PharmD MSACI"]
 edition = "2021"
