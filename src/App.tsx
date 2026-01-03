@@ -3055,10 +3055,10 @@ Remove redundancy, tighten phrasing. Preserve all facts. Do NOT add new informat
                       <FileDown size={12} /> Export DOCX
                     </button>
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         setActionsOpen(false)
                         try {
-                          exportPdf(profile, buildExportSections(), includeChatInExport ? allChatMessages : [], { includeAppendix, includeOpenQuestions })
+                          await exportPdf(profile, buildExportSections(), includeChatInExport ? allChatMessages : [], { includeAppendix, includeOpenQuestions })
                           addToast('success', 'PDF exported successfully')
                         } catch (err) {
                           console.error('PDF export failed:', err)

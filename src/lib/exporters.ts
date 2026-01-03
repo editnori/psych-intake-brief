@@ -10,12 +10,15 @@ import {
   TableCell,
   WidthType,
   BorderStyle,
-  ShadingType
+  ShadingType,
+  LevelFormat
 } from 'docx'
 import { saveAs } from 'file-saver'
 import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 import type { PatientProfile, TemplateSection, Citation, ChatMessage } from './types'
 import { stripInlineChunkIds, formatProfile, normalizeForRendering } from './textUtils'
+import { markdownToHtml } from './markdownToHtml'
 
 interface CitationIndex {
   map: Map<string, number>
@@ -26,6 +29,117 @@ interface CitationIndex {
 const FONT_SERIF = 'Times New Roman'
 const FONT_SANS = 'Arial'
 const FONT_MONO = 'Courier New'
+
+// ============================================================================
+// SHARED EXPORT CONSTANTS - Matching DOM index.css variables
+// ============================================================================
+
+// Colors matching CSS variables from index.css
+const EXPORT_COLORS = {
+  // Text hierarchy
+  ink: '#1A1612',
+  text: '#3D352C',
+  textSecondary: '#5C5248',
+  textTertiary: '#7A7068',
+  textMuted: '#A8A090',
+  
+  // Backgrounds
+  canvas: '#FDFAF6',
+  paper: '#FAF7F2',
+  surface: '#F4F0E8',
+  muted: '#EFEBE4',
+  
+  // Borders
+  border: '#E4DFD6',
+  borderSubtle: '#EBE7E0',
+  
+  // Accents - Clinical Maple
+  maple: '#C25D35',
+  mapleDark: '#9A4628',
+  mapleLight: '#E08860',
+  mapleBg: '#FBF5F2', // Solid version of rgba(194, 93, 53, 0.06)
+  
+  // Secondary accents
+  forest: '#3D5A47',
+  azure: '#4A6FA5',
+  
+  // Semantic
+  success: '#4A7C59',
+  error: '#A8423F',
+  
+  // DSM badge colors
+  dsmMet: '#16a34a',
+  dsmMetBg: '#dcfce7', // light green bg
+  dsmMetBorder: '#86efac',
+  dsmNotMet: '#dc2626',
+  dsmNotMetBg: '#fee2e2', // light red bg
+  dsmNotMetBorder: '#fca5a5',
+  dsmUnknown: '#ca8a04',
+  dsmUnknownBg: '#fef9c3', // light yellow bg
+  dsmUnknownBorder: '#fde047',
+  dsmPartial: '#ea580c',
+  dsmPartialBg: '#ffedd5', // light orange bg
+  dsmPartialBorder: '#fdba74'
+} as const
+
+// DOCX hex colors (without #)
+const DOCX_COLORS = {
+  ink: '1A1612',
+  text: '3D352C',
+  textSecondary: '5C5248',
+  textTertiary: '7A7068',
+  textMuted: 'A8A090',
+  surface: 'F4F0E8',
+  muted: 'EFEBE4',
+  border: 'E4DFD6',
+  maple: 'C25D35',
+  mapleBg: 'FBF5F2',
+  forest: '3D5A47',
+  forestBg: 'F0F4F1',
+  error: 'A8423F',
+  dsmMet: '16a34a',
+  dsmMetBg: 'dcfce7',
+  dsmNotMet: 'dc2626',
+  dsmNotMetBg: 'fee2e2',
+  dsmUnknown: 'ca8a04',
+  dsmUnknownBg: 'fef9c3',
+  dsmPartial: 'ea580c',
+  dsmPartialBg: 'ffedd5'
+} as const
+
+// Callout style configurations matching DOM
+const CALLOUT_CONFIG = {
+  keyHighlights: {
+    accent: DOCX_COLORS.maple,
+    fill: DOCX_COLORS.surface,
+    titleColor: DOCX_COLORS.textSecondary
+  },
+  openQuestions: {
+    accent: DOCX_COLORS.forest,
+    fill: DOCX_COLORS.surface,
+    titleColor: DOCX_COLORS.textSecondary
+  },
+  postInterview: {
+    accent: DOCX_COLORS.maple,
+    fill: DOCX_COLORS.mapleBg,
+    titleColor: DOCX_COLORS.maple
+  },
+  updates: {
+    accent: DOCX_COLORS.maple,
+    fill: DOCX_COLORS.mapleBg,
+    titleColor: DOCX_COLORS.maple
+  }
+} as const
+
+// Font sizes in half-points for DOCX (24 = 12pt)
+const DOCX_SIZES = {
+  title: 32,      // 16pt
+  heading: 24,    // 12pt
+  body: 22,       // 11pt
+  small: 18,      // 9pt
+  calloutTitle: 20, // 10pt
+  badge: 18       // 9pt
+} as const
 
 function formatMarkdownTables(text: string): string {
   const lines = text.split('\n')
@@ -301,12 +415,16 @@ function buildCitationIndex(sections: TemplateSection[], chat: ChatMessage[] = [
 
 // formatProfile imported from textUtils
 
-// DSM badge colors for DOCX export
+// DSM badge colors for DOCX export (using shared constants)
 const DSM_COLORS = {
-  met: '16a34a',      // green
-  notMet: 'dc2626',   // red
-  unknown: 'ca8a04',  // amber
-  partial: 'ea580c'   // orange
+  met: DOCX_COLORS.dsmMet,
+  metBg: DOCX_COLORS.dsmMetBg,
+  notMet: DOCX_COLORS.dsmNotMet,
+  notMetBg: DOCX_COLORS.dsmNotMetBg,
+  unknown: DOCX_COLORS.dsmUnknown,
+  unknownBg: DOCX_COLORS.dsmUnknownBg,
+  partial: DOCX_COLORS.dsmPartial,
+  partialBg: DOCX_COLORS.dsmPartialBg
 }
 
 
@@ -318,6 +436,41 @@ interface LineStyle {
 }
 
 type LineStyleFn = (line: string) => LineStyle | null
+
+// Helper to create a DSM badge TextRun with proper styling (color + background)
+function createDsmBadgeRun(badge: string, size: number, addBreak?: boolean): TextRun {
+  const lowerBadge = badge.toLowerCase()
+  let textColor: string
+  let bgColor: string
+  
+  if (lowerBadge === '+') {
+    textColor = DSM_COLORS.met
+    bgColor = DSM_COLORS.metBg
+  } else if (lowerBadge === '-') {
+    textColor = DSM_COLORS.notMet
+    bgColor = DSM_COLORS.notMetBg
+  } else if (lowerBadge === '?') {
+    textColor = DSM_COLORS.unknown
+    bgColor = DSM_COLORS.unknownBg
+  } else {
+    textColor = DSM_COLORS.partial
+    bgColor = DSM_COLORS.partialBg
+  }
+  
+  return new TextRun({
+    text: `[${badge}]`,
+    size: size,
+    color: textColor,
+    font: FONT_MONO,
+    bold: true,
+    shading: {
+      type: ShadingType.SOLID,
+      color: bgColor,
+      fill: bgColor
+    },
+    break: addBreak ? 1 : undefined
+  })
+}
 
 function runsFromText(text: string, size: number, color: string, lineStyleFn?: LineStyleFn): TextRun[] {
   // Pre-normalize the text for consistent formatting
@@ -362,18 +515,17 @@ function runsFromText(text: string, size: number, color: string, lineStyleFn?: L
     
     // For headers (bold subheaders), render with special formatting
     if (parsed.type === 'header' && parsed.isSubheader) {
-      // Add badge first if present
+      // Add badge first if present - with background highlighting
       if (parsed.badge) {
-        const badgeColor = parsed.badge === '+' ? DSM_COLORS.met
-          : parsed.badge === '-' ? DSM_COLORS.notMet
-          : parsed.badge === '?' ? DSM_COLORS.unknown
-          : DSM_COLORS.partial
+        const badgeRun = createDsmBadgeRun(parsed.badge, lineSize, !hasRun && idx > 0)
+        runs.push(badgeRun)
+        hasRun = true
+        // Add space after badge
         pushRun({
-          text: `[${parsed.badge}] `,
+          text: ' ',
           size: lineSize,
-          color: badgeColor,
-          font: FONT_MONO,
-          bold: true
+          color: lineColor,
+          font: FONT_SANS
         })
       }
       // Add bold header text
@@ -387,18 +539,17 @@ function runsFromText(text: string, size: number, color: string, lineStyleFn?: L
       continue
     }
     
-    // For bullet/numbered items, add the badge first if present
+    // For bullet/numbered items, add the badge first if present - with background
     if ((parsed.type === 'bullet' || parsed.type === 'numbered') && parsed.badge) {
-      const badgeColor = parsed.badge === '+' ? DSM_COLORS.met
-        : parsed.badge === '-' ? DSM_COLORS.notMet
-        : parsed.badge === '?' ? DSM_COLORS.unknown
-        : DSM_COLORS.partial
+      const badgeRun = createDsmBadgeRun(parsed.badge, lineSize, !hasRun && idx > 0)
+      runs.push(badgeRun)
+      hasRun = true
+      // Add space after badge
       pushRun({
-        text: `[${parsed.badge}] `,
+        text: ' ',
         size: lineSize,
-        color: badgeColor,
-        font: FONT_MONO,
-        bold: true
+        color: lineColor,
+        font: FONT_SANS
       })
       // Add the bullet/number and text
       pushRun({
@@ -472,20 +623,10 @@ function runsFromText(text: string, size: number, color: string, lineStyleFn?: L
         }
       }
       
-      // Add the badge with color
-      const badge = match[1].toLowerCase()
-      const badgeColor = badge === '+' ? DSM_COLORS.met
-        : badge === '-' ? DSM_COLORS.notMet
-        : badge === '?' ? DSM_COLORS.unknown
-        : DSM_COLORS.partial
-      
-      pushRun({
-        text: `[${match[1]}]`,
-        size: lineSize,
-        color: badgeColor,
-        font: FONT_MONO,
-        bold: true
-      })
+      // Add the badge with color and background highlighting
+      const badgeRun = createDsmBadgeRun(match[1], lineSize, !hasRun && idx > 0)
+      runs.push(badgeRun)
+      hasRun = true
       
       lastEnd = match.index + match[0].length
     }
@@ -590,42 +731,202 @@ function runsFromText(text: string, size: number, color: string, lineStyleFn?: L
   return runs
 }
 
-const CALLOUT_STYLES: Record<'open' | 'highlights' | 'post', { accent: string; fill: string }> = {
-  open: { accent: '3D5A47', fill: 'F6F3ED' },
-  highlights: { accent: 'B85C38', fill: 'F6F3ED' },
-  post: { accent: 'B85C38', fill: 'F7EFE9' }
+function buildDocxParagraphsFromText(text: string, size: number, color: string, lineStyleFn?: LineStyleFn): Paragraph[] {
+  const lines = (text || '').split('\n')
+  const out: Paragraph[] = []
+
+  for (const line of lines) {
+    const parsed = parseLine(line)
+    const style = lineStyleFn ? lineStyleFn(line) : null
+    const lineSize = style?.size ?? size
+    const lineColor = style?.color ?? color
+
+    if (parsed.type === 'empty') {
+      out.push(new Paragraph({ text: '', spacing: { after: 60 } }))
+      continue
+    }
+
+    if (parsed.type === 'bullet') {
+      const content = line.replace(/^[-•*]\s+/, '')
+      // Use en-dash bullet marker instead of default bullet
+      const bulletRuns = [
+        new TextRun({
+          text: '– ',
+          size: lineSize,
+          color: DOCX_COLORS.textSecondary,
+          font: FONT_SANS
+        }),
+        ...runsFromText(content, lineSize, lineColor, lineStyleFn)
+      ]
+      out.push(new Paragraph({
+        children: bulletRuns,
+        indent: { left: 360, hanging: 180 },
+        spacing: { after: 80, line: 276 }
+      }))
+      continue
+    }
+
+    if (parsed.type === 'numbered') {
+      const content = line.replace(/^\d+\.\s+/, '')
+      // Extract the number for manual formatting with maple color
+      const numMatch = line.match(/^(\d+)\.\s+/)
+      const num = numMatch ? numMatch[1] : '1'
+      const numberedRuns = [
+        new TextRun({
+          text: `${num}. `,
+          size: lineSize,
+          color: DOCX_COLORS.maple,
+          font: FONT_SANS,
+          bold: true
+        }),
+        ...runsFromText(content, lineSize, lineColor, lineStyleFn)
+      ]
+      out.push(new Paragraph({
+        children: numberedRuns,
+        indent: { left: 360, hanging: 200 },
+        spacing: { after: 100, line: 276 }
+      }))
+      continue
+    }
+
+    out.push(new Paragraph({
+      children: runsFromText(line, lineSize, lineColor, lineStyleFn),
+      spacing: { after: 180, line: 276 }
+    }))
+  }
+
+  return out
+}
+
+const CALLOUT_STYLES: Record<'open' | 'highlights' | 'post', { accent: string; fill: string; titleColor: string }> = {
+  open: { 
+    accent: CALLOUT_CONFIG.openQuestions.accent, 
+    fill: CALLOUT_CONFIG.openQuestions.fill,
+    titleColor: CALLOUT_CONFIG.openQuestions.titleColor
+  },
+  highlights: { 
+    accent: CALLOUT_CONFIG.keyHighlights.accent, 
+    fill: CALLOUT_CONFIG.keyHighlights.fill,
+    titleColor: CALLOUT_CONFIG.keyHighlights.titleColor
+  },
+  post: { 
+    accent: CALLOUT_CONFIG.postInterview.accent, 
+    fill: CALLOUT_CONFIG.postInterview.fill,
+    titleColor: CALLOUT_CONFIG.postInterview.titleColor
+  }
 }
 
 function buildCalloutTable(label: string, kind: 'open' | 'highlights' | 'post', lines: string[]): Table {
   const style = CALLOUT_STYLES[kind]
+  
+  // Title paragraph with proper styling matching DOM
   const children: Paragraph[] = [
     new Paragraph({
-      children: [new TextRun({ text: label.toUpperCase(), size: 16, bold: true, color: '6B6356', font: FONT_SANS })],
-      spacing: { after: 80 }
+      children: [new TextRun({ 
+        text: label.toUpperCase(), 
+        size: DOCX_SIZES.calloutTitle, 
+        bold: true, 
+        color: style.titleColor, 
+        font: FONT_SANS 
+      })],
+      spacing: { after: 100 }
     })
   ]
+  
+  // Process each line with proper Answer/Source detection and styling
   for (const line of lines) {
     if (!line.trim()) {
       children.push(new Paragraph({ text: '', spacing: { after: 60 } }))
       continue
     }
+    
     const trimmed = line.trim()
-    const isAnswer = /^answer\s*:/i.test(trimmed)
-    const isSource = /^source\s*:/i.test(trimmed)
+    
+    // Check for Answer: prefix - styled in error/red color, bold
+    const answerMatch = trimmed.match(/^(answer\s*:)\s*(.*)$/i)
+    if (answerMatch) {
+      const answerRuns: TextRun[] = [
+        new TextRun({
+          text: 'Answer: ',
+          size: DOCX_SIZES.body,
+          color: DOCX_COLORS.error,
+          bold: true,
+          font: FONT_SANS
+        }),
+        new TextRun({
+          text: answerMatch[2],
+          size: DOCX_SIZES.body,
+          color: DOCX_COLORS.error,
+          bold: true,
+          font: FONT_SANS
+        })
+      ]
+      children.push(new Paragraph({
+        children: answerRuns,
+        spacing: { after: 80 }
+      }))
+      continue
+    }
+    
+    // Check for Source: prefix - styled in muted color, italic
+    const sourceMatch = trimmed.match(/^(source\s*:)\s*(.*)$/i)
+    if (sourceMatch) {
+      const sourceRuns: TextRun[] = [
+        new TextRun({
+          text: 'Source: ',
+          size: DOCX_SIZES.small,
+          color: DOCX_COLORS.textMuted,
+          italics: true,
+          font: FONT_SANS
+        }),
+        new TextRun({
+          text: sourceMatch[2],
+          size: DOCX_SIZES.small,
+          color: DOCX_COLORS.textMuted,
+          italics: true,
+          font: FONT_SANS
+        })
+      ]
+      children.push(new Paragraph({
+        children: sourceRuns,
+        spacing: { after: 60 }
+      }))
+      continue
+    }
+    
+    // Check for bullet points
+    const bulletMatch = trimmed.match(/^[-•]\s*(.*)$/)
+    if (bulletMatch) {
+      children.push(new Paragraph({
+        children: [new TextRun({
+          text: bulletMatch[1],
+          size: DOCX_SIZES.body,
+          color: DOCX_COLORS.ink,
+          font: FONT_SANS
+        })],
+        bullet: { level: 0 },
+        indent: { left: 360, hanging: 180 },
+        spacing: { after: 60, line: 276 }
+      }))
+      continue
+    }
+    
+    // Regular line - italic for open questions content
+    const isOpenQuestion = kind === 'open'
     children.push(new Paragraph({
       children: [
         new TextRun({
           text: line,
-          size: 20,
-          color: isAnswer ? 'A8423F' : isSource ? 'A8A090' : '2C2416',
-          bold: isAnswer,
-          italics: isSource,
+          size: DOCX_SIZES.body,
+          color: DOCX_COLORS.ink,
+          italics: isOpenQuestion,
           font: FONT_SANS
         })
       ],
       spacing: { after: 60 }
     }))
   }
+  
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [
@@ -635,12 +936,12 @@ function buildCalloutTable(label: string, kind: 'open' | 'highlights' | 'post', 
             children,
             shading: { fill: style.fill, color: style.fill, type: ShadingType.SOLID },
             borders: {
-              top: { style: BorderStyle.SINGLE, color: 'E4DFD6', size: 4 },
-              bottom: { style: BorderStyle.SINGLE, color: 'E4DFD6', size: 4 },
-              left: { style: BorderStyle.SINGLE, color: style.accent, size: 16 },
-              right: { style: BorderStyle.SINGLE, color: 'E4DFD6', size: 4 }
+              top: { style: BorderStyle.SINGLE, color: DOCX_COLORS.border, size: 4 },
+              bottom: { style: BorderStyle.SINGLE, color: DOCX_COLORS.border, size: 4 },
+              left: { style: BorderStyle.SINGLE, color: style.accent, size: 24 }, // Thicker left accent
+              right: { style: BorderStyle.SINGLE, color: DOCX_COLORS.border, size: 4 }
             },
-            margins: { top: 140, bottom: 140, left: 220, right: 160 }
+            margins: { top: 140, bottom: 140, left: 240, right: 180 }
           })
         ]
       })
@@ -695,14 +996,15 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
   const { list } = buildCitationIndex(visibleSections, chat)
   const profileLine = normalizePdfText(formatProfile(profile))
 
-  // Font sizes in half-points (24 = 12pt, 22 = 11pt, 20 = 10pt)
-  const SIZE_TITLE = 32      // 16pt
-  const SIZE_HEADING = 24    // 12pt
-  const SIZE_BODY = 22       // 11pt
-  const SIZE_SMALL = 18      // 9pt
+  // Use shared size constants
+  const SIZE_TITLE = DOCX_SIZES.title
+  const SIZE_HEADING = DOCX_SIZES.heading
+  const SIZE_BODY = DOCX_SIZES.body
+  const SIZE_SMALL = DOCX_SIZES.small
 
-  // Consistent color scheme
-  const COLOR_INK = '2C2416'
+  // Use shared color constants
+  const COLOR_INK = DOCX_COLORS.ink
+  const HEADER_COLOR = DOCX_COLORS.ink
 
   const paragraphs: Array<Paragraph | Table> = [
     new Paragraph({
@@ -716,18 +1018,15 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
 
   if (profileLine) {
     paragraphs.push(new Paragraph({
-      children: [new TextRun({ text: profileLine, color: '333333', size: SIZE_BODY, font: FONT_SANS })],
+      children: [new TextRun({ text: profileLine, color: DOCX_COLORS.text, size: SIZE_BODY, font: FONT_SANS })],
       spacing: { after: 100 }
     }))
   }
 
   paragraphs.push(new Paragraph({
-    children: [new TextRun({ text: `Generated ${new Date().toLocaleString()}`, italics: true, color: '666666', size: SIZE_SMALL, font: FONT_SANS })],
+    children: [new TextRun({ text: `Generated ${new Date().toLocaleString()}`, italics: true, color: DOCX_COLORS.textTertiary, size: SIZE_SMALL, font: FONT_SANS })],
     spacing: { after: 300 }
   }))
-
-  // Standard header color for consistent look
-  const HEADER_COLOR = '2C2416'
 
   for (const section of visibleSections) {
     // Section heading without citation numbers (cleaner look)
@@ -747,7 +1046,7 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
     const blocks = buildExportBlocks(sectionOutput)
     if (blocks.length === 0) {
       paragraphs.push(new Paragraph({
-        children: [new TextRun({ text: '—', size: SIZE_BODY, color: '999999', font: FONT_SANS })],
+        children: [new TextRun({ text: '—', size: SIZE_BODY, color: DOCX_COLORS.textMuted, font: FONT_SANS })],
         spacing: { after: 200 }
       }))
       continue
@@ -771,7 +1070,7 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
         ? (line: string) => {
             const type = getDsmLineType(line)
             if (type === 'criteria') {
-              return { size: SIZE_BODY - 2, color: '4A4136', indentSpaces: 4 }
+              return { size: SIZE_BODY - 2, color: DOCX_COLORS.text, indentSpaces: 4 }
             }
             if (type === 'header') {
               return { bold: true }
@@ -781,11 +1080,10 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
         : undefined
 
       for (const paragraphText of paragraphsText) {
-        const bodyRuns = runsFromText(paragraphText, SIZE_BODY, COLOR_INK, lineStyleFn)
-        paragraphs.push(new Paragraph({
-          children: bodyRuns,
-          spacing: { after: 180, line: 276 } // 1.15 line spacing
-        }))
+        const docxParagraphs = buildDocxParagraphsFromText(paragraphText, SIZE_BODY, COLOR_INK, lineStyleFn)
+        for (const paragraph of docxParagraphs) {
+          paragraphs.push(paragraph)
+        }
       }
     }
   }
@@ -818,9 +1116,9 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
     for (const item of list) {
       paragraphs.push(new Paragraph({
         children: [
-          new TextRun({ text: `[${item.id}] `, bold: true, size: SIZE_SMALL, color: '666666', font: FONT_MONO }),
+          new TextRun({ text: `[${item.id}] `, bold: true, size: SIZE_SMALL, color: DOCX_COLORS.textTertiary, font: FONT_MONO }),
           new TextRun({ text: `${item.citation.sourceName}: `, bold: true, size: SIZE_BODY, font: FONT_SANS }),
-          new TextRun({ text: item.citation.excerpt, size: SIZE_BODY, color: '444444', font: FONT_SANS })
+          new TextRun({ text: item.citation.excerpt, size: SIZE_BODY, color: DOCX_COLORS.textSecondary, font: FONT_SANS })
         ],
         spacing: { after: 100 }
       }))
@@ -837,6 +1135,26 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
           }
         }
       }
+    },
+    numbering: {
+      config: [
+        {
+          reference: 'numbered-list',
+          levels: [
+            {
+              level: 0,
+              format: LevelFormat.DECIMAL,
+              text: '%1.',
+              alignment: AlignmentType.LEFT,
+              style: {
+                paragraph: {
+                  indent: { left: 360, hanging: 180 }
+                }
+              }
+            }
+          ]
+        }
+      ]
     },
     sections: [
       {
@@ -862,7 +1180,8 @@ export async function exportDocx(profile: PatientProfile, sections: TemplateSect
   saveAs(blob, filename)
 }
 
-export function exportPdf(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = [], options: ExportOptions = {}) {
+export async function exportPdf(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[] = [], options: ExportOptions = {}) {
+  // Native PDF rendering with vector text (no html2canvas bitmap rendering)
   const visibleSections = filterSectionsForExport(sections, options)
   const { list } = buildCitationIndex(visibleSections, chat)
   const doc = new jsPDF({ unit: 'pt', format: 'letter' })
@@ -1375,4 +1694,543 @@ export function exportPdf(profile: PatientProfile, sections: TemplateSection[], 
   const timestamp = new Date().toISOString().slice(0, 10)
   const filename = `psych-intake-${safeName}-${timestamp}.pdf`
   doc.save(filename)
+}
+
+async function exportPdfFromHtml(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[], options: ExportOptions) {
+  const visibleSections = filterSectionsForExport(sections, options)
+  const html = buildExportHtml(profile, visibleSections, chat, options)
+
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' })
+  const pageWidth = doc.internal.pageSize.width
+  const margin = 54
+
+  ;(window as any).html2canvas = html2canvas
+
+  const host = document.createElement('div')
+  host.style.position = 'absolute'
+  host.style.left = '0'
+  host.style.top = '0'
+  host.style.width = `${pageWidth - margin * 2}px`
+  host.style.padding = '0'
+  host.style.margin = '0'
+  host.style.background = '#ffffff'
+  host.style.zIndex = '-1'
+  host.innerHTML = html
+  document.body.appendChild(host)
+
+  await new Promise<void>(resolve => {
+    doc.html(host, {
+      x: margin,
+      y: margin,
+      width: pageWidth - margin * 2,
+      windowWidth: host.scrollWidth || pageWidth - margin * 2,
+      autoPaging: 'text',
+      html2canvas: { scale: 0.9, backgroundColor: '#ffffff' },
+      callback: () => resolve()
+    })
+  })
+
+  document.body.removeChild(host)
+
+  const safeName = (profile.name || 'patient').replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()
+  const timestamp = new Date().toISOString().slice(0, 10)
+  const filename = `psych-intake-${safeName}-${timestamp}.pdf`
+  doc.save(filename)
+}
+
+function buildExportHtml(profile: PatientProfile, sections: TemplateSection[], chat: ChatMessage[], options: ExportOptions): string {
+  const { list } = buildCitationIndex(sections, chat)
+  const profileLine = normalizePdfText(formatProfile(profile))
+
+  // CSS for PDF export - ALL VALUES INLINED (no CSS variables) for html2canvas compatibility
+  // html2canvas does NOT support: CSS variables, ::before/::after pseudo-elements, ::marker
+  const css = `
+    * { box-sizing: border-box; }
+    
+    body { 
+      margin: 0; 
+      padding: 0; 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.6;
+      color: ${EXPORT_COLORS.ink};
+      background: white;
+    }
+    
+    .export-root { 
+      color: ${EXPORT_COLORS.ink}; 
+      max-width: 100%;
+    }
+    
+    /* Title styling */
+    .export-title { 
+      font-family: Georgia, "Times New Roman", Times, serif;
+      font-size: 18px; 
+      font-weight: 700; 
+      letter-spacing: -0.02em;
+      margin: 0 0 8px 0; 
+      color: ${EXPORT_COLORS.ink};
+    }
+    
+    .export-meta { 
+      font-size: 11px; 
+      color: ${EXPORT_COLORS.textMuted}; 
+      margin: 0 0 16px 0; 
+      font-style: italic;
+    }
+    
+    .export-profile { 
+      font-size: 12px; 
+      color: ${EXPORT_COLORS.text}; 
+      margin: 0 0 6px 0; 
+    }
+    
+    /* Section styling */
+    .export-section { 
+      margin: 14px 0; 
+      page-break-inside: avoid;
+    }
+    
+    .export-section-title { 
+      font-family: Georgia, "Times New Roman", Times, serif;
+      font-size: 12px; 
+      font-weight: 700; 
+      letter-spacing: 0.08em; 
+      text-transform: uppercase; 
+      margin: 0 0 8px 0; 
+      color: ${EXPORT_COLORS.ink};
+      border-bottom: 1px solid ${EXPORT_COLORS.borderSubtle};
+      padding-bottom: 4px;
+    }
+
+    /* ============ MARKDOWN BASE ============ */
+    .markdown { 
+      font-size: 12px; 
+      line-height: 1.55; 
+      color: ${EXPORT_COLORS.ink}; 
+    }
+    
+    .markdown p { 
+      margin: 0 0 0.6em 0; 
+    }
+    
+    .markdown p:last-child { 
+      margin-bottom: 0; 
+    }
+    
+    .markdown strong { 
+      font-weight: 600; 
+      color: ${EXPORT_COLORS.ink}; 
+    }
+    
+    .markdown em { 
+      font-style: italic; 
+      color: ${EXPORT_COLORS.textSecondary}; 
+    }
+    
+    /* Lists - simple styling that html2canvas supports */
+    .markdown ul, .markdown ol { 
+      margin: 0.2em 0 0.6em 0; 
+      padding-left: 1.5em; 
+    }
+    
+    .markdown li { 
+      margin: 0.25em 0; 
+    }
+    
+    .markdown ul { 
+      list-style-type: disc;
+    }
+    
+    .markdown ol { 
+      list-style-type: decimal; 
+    }
+    
+    .markdown ol > li { 
+      margin: 0.5em 0; 
+    }
+    
+    /* Headers */
+    .markdown h1, .markdown h2, .markdown h3 {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: ${EXPORT_COLORS.textSecondary};
+      margin: 1em 0 0.5em 0;
+    }
+    
+    .markdown h1:first-child, 
+    .markdown h2:first-child, 
+    .markdown h3:first-child { 
+      margin-top: 0; 
+    }
+    
+    /* Blockquotes */
+    .markdown blockquote { 
+      border-left: 2px solid ${EXPORT_COLORS.border}; 
+      padding-left: 0.8em; 
+      margin: 0.5em 0;
+      color: ${EXPORT_COLORS.textSecondary}; 
+    }
+    
+    /* Tables */
+    .markdown table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      font-size: 11px; 
+      margin: 0.5em 0 0.8em; 
+    }
+    
+    .markdown th, .markdown td { 
+      border: 1px solid ${EXPORT_COLORS.border}; 
+      padding: 4px 8px; 
+      text-align: left; 
+      vertical-align: top;
+    }
+    
+    .markdown th { 
+      background: ${EXPORT_COLORS.surface}; 
+      color: ${EXPORT_COLORS.textSecondary}; 
+      font-weight: 600; 
+      text-transform: uppercase; 
+      font-size: 10px; 
+      letter-spacing: 0.05em; 
+    }
+    
+    .markdown td:first-child {
+      font-weight: 500;
+      color: ${EXPORT_COLORS.ink};
+    }
+    
+    /* Code */
+    .markdown code { 
+      font-family: "Courier New", Consolas, Monaco, monospace;
+      background: ${EXPORT_COLORS.surface}; 
+      padding: 1px 4px; 
+      border-radius: 3px; 
+      font-size: 0.9em;
+    }
+    
+    /* Subheader paragraphs (bold labels) */
+    .markdown p.md-subheader { 
+      margin-top: 1.25em; 
+      margin-bottom: 0.25em; 
+      line-height: 1.4; 
+    }
+    
+    .markdown p.md-subheader:first-child { 
+      margin-top: 0; 
+    }
+    
+    .markdown p.md-subheader + ul,
+    .markdown p.md-subheader + ol { 
+      margin-top: 0; 
+      margin-bottom: 0.75em; 
+    }
+    
+    .markdown ul + p.md-subheader,
+    .markdown ol + p.md-subheader { 
+      margin-top: 1.5em; 
+    }
+    
+    .markdown p.md-subheader + p.md-subheader { 
+      margin-top: 1em; 
+    }
+    
+    .markdown ul ul, 
+    .markdown ol ul, 
+    .markdown ul ol, 
+    .markdown ol ol { 
+      margin-top: 0.15em; 
+      margin-bottom: 0.15em; 
+    }
+
+    /* ============ NOTE MARKDOWN (Section Content) ============ */
+    /* Uses same simple list styling - no pseudo-elements */
+    .note-markdown { 
+      color: ${EXPORT_COLORS.ink}; 
+    }
+    
+    .note-markdown strong { 
+      color: ${EXPORT_COLORS.ink}; 
+      font-weight: 600; 
+    }
+    
+    .note-markdown ul, .note-markdown ol { 
+      margin: 0.2em 0 0.6em 0; 
+      padding-left: 1.5em; 
+    }
+    
+    .note-markdown ul {
+      list-style-type: disc;
+    }
+    
+    .note-markdown ol {
+      list-style-type: decimal;
+    }
+    
+    .note-markdown table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      font-size: 11px; 
+      margin: 0.6em 0; 
+    }
+    
+    .note-markdown th, .note-markdown td { 
+      border: 1px solid ${EXPORT_COLORS.border}; 
+      padding: 4px 8px; 
+      text-align: left; 
+    }
+    
+    .note-markdown th { 
+      background: ${EXPORT_COLORS.surface}; 
+      color: ${EXPORT_COLORS.textSecondary}; 
+      font-weight: 600; 
+      text-transform: uppercase; 
+      font-size: 10px; 
+      letter-spacing: 0.05em; 
+    }
+    
+    .note-markdown td:first-child {
+      font-weight: 500;
+      color: ${EXPORT_COLORS.ink};
+    }
+
+    /* ============ CALLOUT BOXES ============ */
+    .key-highlights, 
+    .open-questions, 
+    .post-interview, 
+    .update-notes {
+      margin: 10px 0;
+      padding: 10px 14px;
+      border: 1px solid ${EXPORT_COLORS.border};
+      border-left: 3px solid ${EXPORT_COLORS.maple};
+      background: ${EXPORT_COLORS.surface};
+      page-break-inside: avoid;
+    }
+    
+    /* Key Highlights - maple accent */
+    .key-highlights {
+      border-left-color: ${EXPORT_COLORS.maple};
+    }
+    
+    /* Open Questions - forest accent */
+    .open-questions { 
+      border-left-color: ${EXPORT_COLORS.forest}; 
+    }
+    
+    /* Post-Interview & Updates - maple accent with tinted bg */
+    .post-interview, 
+    .update-notes { 
+      border-left-color: ${EXPORT_COLORS.maple}; 
+      background: ${EXPORT_COLORS.mapleBg}; 
+    }
+    
+    /* Callout titles */
+    .kh-title, 
+    .oq-title, 
+    .pi-title { 
+      font-size: 10px; 
+      font-weight: 700; 
+      letter-spacing: 0.08em; 
+      text-transform: uppercase; 
+      color: ${EXPORT_COLORS.textSecondary}; 
+      margin: 0 0 6px 0; 
+    }
+    
+    .post-interview .pi-title, 
+    .update-notes .pi-title { 
+      color: ${EXPORT_COLORS.maple}; 
+    }
+    
+    /* Callout content */
+    .key-highlights ul,
+    .open-questions ul,
+    .post-interview ul,
+    .update-notes ul {
+      margin: 0.2em 0 0 1.1em;
+      list-style-type: disc;
+    }
+    
+    .open-questions p, 
+    .post-interview p, 
+    .update-notes p { 
+      margin: 0.3em 0; 
+      font-style: italic;
+      color: inherit;
+    }
+    
+    .open-questions p:last-child,
+    .post-interview p:last-child,
+    .update-notes p:last-child {
+      margin-bottom: 0;
+    }
+    
+    /* Answer styling in open questions - red bold */
+    .open-questions .oq-answer { 
+      display: block; 
+      margin-top: 4px; 
+      color: ${EXPORT_COLORS.error}; 
+      font-weight: 700; 
+      font-style: normal; 
+    }
+
+    /* ============ DSM BADGES ============ */
+    /* IMPORTANT: html2canvas compatible - no CSS variables, inline display, tight sizing */
+    .dsm-badge { 
+      display: inline;
+      font-family: "Courier New", Consolas, Monaco, monospace;
+      font-size: 11px; 
+      font-weight: 700; 
+      padding: 0 3px; 
+      border-radius: 2px; 
+      margin: 0 1px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    
+    .dsm-met { 
+      background-color: rgba(34, 197, 94, 0.15); 
+      color: #16a34a; 
+      border: 1px solid rgba(34, 197, 94, 0.3); 
+    }
+    
+    .dsm-not-met { 
+      background-color: rgba(239, 68, 68, 0.1); 
+      color: #dc2626; 
+      border: 1px solid rgba(239, 68, 68, 0.25); 
+    }
+    
+    .dsm-unknown { 
+      background-color: rgba(234, 179, 8, 0.15); 
+      color: #ca8a04; 
+      border: 1px solid rgba(234, 179, 8, 0.3); 
+    }
+    
+    .dsm-partial { 
+      background-color: rgba(249, 115, 22, 0.12); 
+      color: #ea580c; 
+      border: 1px solid rgba(249, 115, 22, 0.25); 
+    }
+
+    /* ============ CHAT ADDENDA ============ */
+    .export-chat-title, 
+    .export-appendix-title { 
+      font-family: Georgia, "Times New Roman", Times, serif;
+      font-size: 12px; 
+      font-weight: 700; 
+      letter-spacing: 0.08em; 
+      text-transform: uppercase; 
+      margin: 18px 0 10px 0;
+      border-bottom: 1px solid ${EXPORT_COLORS.borderSubtle};
+      padding-bottom: 4px;
+    }
+    
+    .export-chat-item { 
+      margin: 0.5em 0;
+      padding: 6px 0;
+      border-bottom: 1px solid ${EXPORT_COLORS.borderSubtle};
+    }
+    
+    .export-chat-item:last-child {
+      border-bottom: none;
+    }
+    
+    .export-chat-label { 
+      font-weight: 700; 
+      color: ${EXPORT_COLORS.textSecondary};
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+      display: block;
+    }
+    
+    .export-chat-item .note-markdown {
+      font-size: 11px;
+    }
+
+    /* ============ EVIDENCE APPENDIX ============ */
+    .export-appendix-item { 
+      margin: 0.5em 0; 
+      font-size: 10px; 
+      color: ${EXPORT_COLORS.text};
+      padding: 6px 8px;
+      background: ${EXPORT_COLORS.surface};
+      border-left: 2px solid ${EXPORT_COLORS.border};
+    }
+    
+    .export-appendix-num { 
+      font-family: "Courier New", Consolas, Monaco, monospace;
+      color: ${EXPORT_COLORS.textMuted}; 
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    
+    .export-appendix-source {
+      font-weight: 600;
+      color: ${EXPORT_COLORS.text};
+    }
+    
+    .export-appendix-excerpt {
+      color: ${EXPORT_COLORS.textSecondary};
+      font-style: italic;
+    }
+  `
+
+  const sectionHtml = sections.map(section => {
+    const sectionOutput = options.includeOpenQuestions ? (section.output || '') : stripOpenQuestionsFromText(section.output || '')
+    const cleaned = stripInlineChunkIds(sectionOutput)
+    const sectionBody = cleaned ? markdownToHtml(cleaned) : '<p>—</p>'
+    return `
+      <div class="export-section">
+        <div class="export-section-title">${escapeHtml(section.title.toUpperCase())}</div>
+        <div class="note-markdown markdown">${sectionBody}</div>
+      </div>
+    `.trim()
+  }).join('\n')
+
+  const chatHtml = chat.length > 0
+    ? `
+      <div class="export-chat-title">CHAT ADDENDA</div>
+      ${chat.map(msg => {
+        const label = msg.role === 'user' ? 'Clinician' : 'Assistant'
+        const msgHtml = markdownToHtml(stripInlineChunkIds(msg.text || ''))
+        return `<div class="export-chat-item"><span class="export-chat-label">${escapeHtml(label)}</span><div class="note-markdown markdown">${msgHtml}</div></div>`
+      }).join('')}
+    `.trim()
+    : ''
+
+  const appendixHtml = options.includeAppendix && list.length > 0
+    ? `
+      <div class="export-appendix-title">EVIDENCE APPENDIX</div>
+      ${list.map(item => {
+        const excerpt = escapeHtml(item.citation.excerpt || '')
+        const source = escapeHtml(item.citation.sourceName || '')
+        return `<div class="export-appendix-item"><span class="export-appendix-num">[${item.id}]</span><span class="export-appendix-source">${source}:</span> <span class="export-appendix-excerpt">${excerpt}</span></div>`
+      }).join('')}
+    `.trim()
+    : ''
+
+  return `
+    <style>${css}</style>
+    <div class="export-root">
+      <div class="export-title">PSYCH INTAKE BRIEF</div>
+      ${profileLine ? `<div class="export-profile">${escapeHtml(profileLine)}</div>` : ''}
+      <div class="export-meta">Generated ${escapeHtml(new Date().toLocaleString())}</div>
+      ${sectionHtml}
+      ${chatHtml}
+      ${appendixHtml}
+    </div>
+  `.trim()
+}
+
+function escapeHtml(input: string): string {
+  return (input || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+    .replace(/'/g, '&#039;')
 }
