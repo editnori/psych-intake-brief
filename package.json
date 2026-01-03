@@ -1,7 +1,7 @@
 {
   "name": "psych-intake-brief",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "description": "Psychiatric intake summarization tool with AI-powered document analysis",
   "packageManager": "bun@1.3.3",
